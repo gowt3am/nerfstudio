@@ -1,0 +1,76 @@
+# Copyright 2022 The Nerfstudio Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""
+HyperSim datamanager.
+"""
+
+from dataclasses import dataclass, field
+from typing import Type, List, Any
+
+from nerfstudio.data.datamanagers.base_datamanager import (
+    VanillaDataManager,
+    VanillaDataManagerConfig,
+)
+from nerfstudio.data.datasets.hypersim_dataset import HyperSimDataset
+from nerfstudio.data.datasets.base_dataset import InputDataset
+from nerfstudio.data.pixel_samplers import PixelSampler, TrianglePixelSampler
+
+@dataclass
+class HyperSimDataManagerConfig(VanillaDataManagerConfig):
+    """A hypersim datamanager - required to use with .setup()"""
+    _target: Type = field(default_factory=lambda: HyperSimDataManager)
+    
+    labels: List[str] = ["depth", "normals"]
+    """Labels/Files to load"""
+    ray_sampling_strategy: str = "triangle"
+    """The ray sampling strategy to use. Options are "triangle" and "uniform"."""
+    dilation_rate: int = 0
+    """The dilation factor to use for the triangle pixel sampler."""
+
+
+class HyperSimDataManager(VanillaDataManager):  # pylint: disable=abstract-method
+    """Data manager implementation for hypersim dataset.
+    Args:
+        config: the DataManagerConfig used to instantiate class
+    """
+    config: HyperSimDataManagerConfig
+
+    def __init__(self):
+        super().__init__()
+        self.H_orig = self.train_dataparser_outputs.metadata["H_orig"]
+        self.W_orig = self.train_dataparser_outputs.metadata["W_orig"]
+        self.H = int(self.H_orig * self.config.camera_res_scale_factor)
+        self.W = int(self.W_orig * self.config.camera_res_scale_factor)
+
+    def _get_pixel_sampler(  # pylint: disable=no-self-use
+        self, dataset: InputDataset, *args: Any, **kwargs: Any) -> PixelSampler:
+        """Infer which pixel sampler to use."""
+        if self.config.ray_sampling_strategy == "triangle":
+            return TrianglePixelSampler(*args, **kwargs, height = self.H,
+                    width = self.W, dilation_rate = self.config.dilation_rate)
+        elif self.config.ray_sampling_strategy == "uniform":
+            return PixelSampler(*args, **kwargs)
+        else:
+            raise ValueError(f"Invalid ray sampling strategy: {self.config.ray_sampling_strategy}")
+
+    def create_train_dataset(self) -> HyperSimDataset:
+        return HyperSimDataset(dataparser_outputs=self.train_dataparser_outputs,
+                               scale_factor=self.config.camera_res_scale_factor,
+                               labels=self.config.labels)
+
+    def create_eval_dataset(self) -> HyperSimDataset:
+        return HyperSimDataset(dataparser_outputs=self.dataparser.get_dataparser_outputs(
+            split=self.test_split), scale_factor=self.config.camera_res_scale_factor,
+            labels=self.config.labels)

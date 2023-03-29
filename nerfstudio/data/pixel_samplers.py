@@ -17,6 +17,8 @@ Code for sampling pixels.
 """
 
 import random
+import numpy as np
+from einops import rearrange
 from typing import Dict, Optional, Union
 
 import torch
@@ -302,3 +304,81 @@ class PatchPixelSampler(PixelSampler):  # pylint: disable=too-few-public-methods
             indices = indices.flatten(0, 2)
 
         return indices
+
+class TrianglePixelSampler(PixelSampler):
+    """Samples 'pixel_batch's from 'image_batch's. Samples upper left triangular
+    patches uniform randomly from all images. Useful for normal estimation later
+    TODO: Single image pixel sampling not implemented here
+        
+        With dilation rate 0:
+        ____|_x2_|____
+        _x3_|_x1_|____
+            |    |  
+        
+        With dilation rate 1:
+        ____|____|_x2_|____|____
+        ____|____|____|____|____
+        _x3_|____|____|____|____
+        ____|____|_x1_|____|____  
+        ____|____|____|____|____
+    Args:
+        num_rays_per_batch: number of rays to sample per batch (will be divided by 3 for triangles)
+        keep_full_image: whether or not to include a reference to the full image in returned batch
+    """
+    def __init__(self, num_rays_per_batch: int, keep_full_image: bool = False, **kwargs) -> None:
+        # Make number of rays per batch is divisible by 3
+        self.num_triangs = num_rays_per_batch // 3
+        self.batch_size = self.num_triangs * 3
+        super().__init__(self.batch_size, keep_full_image, **kwargs)
+        self.dilaion_rate = kwargs["dilation_rate"]
+        self.height = kwargs["height"]
+        self.width = kwargs["width"]
+
+        self.setup_valid_x123_idxs()
+
+    def setup_valid_x123_idxs(self):
+        self.num_indices = self.height * self.width
+        img_indices = np.arange(0, self.num_indices, 1, dtype=np.int64)
+        img_indices = rearrange(img_indices, '(h w) -> h w', h = self.height)
+        # ____|_x2_|____
+        # _x3_|_x1_|____
+        #     |    |  
+        # Skip boundaries and select only valid values
+        self.valid_idx = {
+            'x1': rearrange(img_indices[1:-1, 1:-1], 'h w -> (h w)'),
+            'x2': rearrange(img_indices[:-2, 1:-1], 'h w -> (h w)'),
+            'x3': rearrange(img_indices[1:-1, :-2], 'h w -> (h w)')}
+    
+    def sample_method(  # pylint: disable=no-self-use
+        self,
+        batch_size: int,
+        num_images: int,
+        image_height: int,
+        image_width: int,
+        mask: Optional[TensorType] = None,
+        device: Union[torch.device, str] = "cpu",
+    ) -> TensorType["batch_size", 3]:
+        if mask is not None:
+            raise NotImplementedError("Masking not implemented for TrianglePixelSampler")
+        
+        image_indices = np.random.choice(num_images, self.num_triangs)
+        triangle_indices = np.random.choice(self.valid_idx['x1'].shape[0], self.num_triangs)
+        x1_indices = self.valid_idx['x1'][triangle_indices]
+        x2_indices = self.valid_idx['x2'][triangle_indices]
+        x3_indices = self.valid_idx['x3'][triangle_indices]
+            
+        image_indices = np.concatenate((image_indices,)*3, axis=0)
+        if self.dilaion_rate > 0:
+            # Dilate all pixels to make the triangle bigger
+            x1_indices_new = (x1_indices + self.dilaion_rate*self.width)
+            x2_indices_new = (x2_indices - self.dilaion_rate*self.width)
+            x3_indices_new = x3_indices - self.dilaion_rate
+
+            x1_indices = np.where(x1_indices_new < self.num_indices, x1_indices_new, x1_indices)
+            x2_indices = np.where(x2_indices_new >= 0, x2_indices_new, x2_indices)    
+            x3_indices = np.where((x3_indices_new // self.width) == (x3_indices // self.width),
+                                  x3_indices_new, x3_indices)
+        pixel_indices = np.concatenate((x1_indices, x2_indices, x3_indices), axis=0)
+        
+        return torch.from_numpy(np.stack((image_indices, pixel_indices // self.width,
+                                pixel_indices % self.width), axis=1), device=device)

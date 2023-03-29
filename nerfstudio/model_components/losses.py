@@ -25,6 +25,10 @@ from typing_extensions import Literal
 from nerfstudio.cameras.rays import RaySamples
 from nerfstudio.utils.math import masked_reduction, normalized_depth_scale_and_shift
 
+import math
+import torch.nn.functional as F
+from nerfstudio.data.utils.data_utils import _cluster_normals
+
 L1Loss = nn.L1Loss
 MSELoss = nn.MSELoss
 
@@ -485,3 +489,151 @@ class ScaleAndShiftInvariantLoss(nn.Module):
         return self.__prediction_ssi
 
     prediction_ssi = property(__get_prediction_ssi)
+
+def _loss_validity_filter(loss, pred, name):
+    """Filter out invalid (None, NaN, inf) loss components and set them to 0"""
+    if loss.nelement() != 1:
+        print(f'{name} loss component is EMPTY and is skipped...')
+        if pred.nelement() == 0:
+            print(f'({name} pred is empty...)')
+        loss = torch.tensor(0.0, device=pred.device)
+    
+    elif torch.isnan(loss):
+        print(f'{name} loss component is NaN and is skipped...')
+        if torch.isnan(pred).any():
+            print(f'({name} pred has nan elements...)')
+        loss = torch.tensor(0.0, device=pred.device)
+
+    elif torch.isinf(loss):
+        print(f'{name} loss component is INF and is skipped...')
+        if torch.isinf(pred).any():
+            print(f'({name} pred has INF elements...)')
+        loss = torch.tensor(0.0, device=pred.device) 
+    return loss
+
+class MSELossFiltered(nn.Module):
+    """MSE Loss + Validity Filter"""
+    def __init__(self):
+        super().__init__()
+        self.mse = MSELoss()
+
+    def forward(self, prediction: TensorType, target: TensorType) -> TensorType:
+        loss = self.mse(prediction, target)
+        return _loss_validity_filter(loss, prediction, 'MSELoss')
+    
+class OpacityLoss(nn.Module):
+    """Encourages opacity to be either 0 or 1 to avoid floater"""
+    def __init__(self):
+        super().__init__()
+        self.mse = MSELoss()
+
+    def forward(self, opacity: TensorType) -> TensorType:
+        op = opacity + 1e-10
+        loss = (-op * torch.log(op)).mean()
+        return _loss_validity_filter(loss, op, 'OpacityLoss')
+    
+class ManhattanNormalLoss(nn.Module):
+    """First performs normal clustering to obtain 3 most orthogonal clusters as
+    Manhattan frame and then calculates 3 loss components:
+    
+    1. manhattan_orthogonal_dot - Forces orthogonality of chosen Manhattan frame
+                                  clusters by dot product
+    2. normal_manhattan_dot     - Forces estimated normals to be close to Manhattan
+                                  frame clusters by dot product
+    3. normal_manhattan_l1      - Forces estimated normals to be close to Manhattan
+                                  frame clusters by L1 norm
+    """
+    def __init__(self, min_cluster_similarity: float = 0.9,
+                manhattan_orthogonal_dot_weight: float = 2e-3,
+                normal_manhattan_dot_weight: float = 2e-3,
+                normal_manhattan_l1_weight: float = 2e-3, start_step: int = 500,
+                grow_till_step: int = 2500, end_step: int = -1):
+        super().__init__()
+        self.mse = MSELoss()
+        self.min_cluster_similarity = min_cluster_similarity
+        
+        self.manhattan_orthogonal_dot_weight = manhattan_orthogonal_dot_weight
+        self.normal_cluster_dot_weight = normal_manhattan_dot_weight
+        self.normal_cluster_l1_weight = normal_manhattan_l1_weight
+
+        self.start_step = start_step
+        self.end_step = end_step
+        self.weight_schedule = lambda weight, step : max(0, min(weight, \
+                    weight * (step - start_step) / (grow_till_step - start_step)))
+
+    def forward(self, normals: TensorType, valid_normals: TensorType, step: int) -> TensorType:
+        if ((self.end_step != -1) and (step >= self.end_step)) or step < self.start_step:
+            return torch.tensor(0.0, device=normals.device)
+        
+        normals = normals[valid_normals]
+        normal_clusters, cluster_centers = _cluster_normals(
+                    normals = normals.detach().contiguous().cpu().numpy(), 
+                    device = normals.device, num_clusters = 20, num_iterations = 20,
+                    similar_threshold = self.min_cluster_similarity,
+                    merge_clusters = True, find_opposites = True)
+        normals_orthogonal = normals[normal_clusters != 0].contiguous()
+        normal_clusters = normal_clusters[normal_clusters != 0]
+
+        # Flip opposites, if any, to just have 3 clusters
+        normals_orthogonal[normal_clusters < 0] *= -1.0
+        normal_clusters[normal_clusters < 0] *= -1
+
+        # Keep only members close enough to cluster centroid
+        discard_1 = (normals_orthogonal[normal_clusters == 1] *
+                    cluster_centers[0].unsqueeze(0)).sum(-1) < self.min_cluster_similarity
+        discard_2 = (normals_orthogonal[normal_clusters == 2] *
+                     cluster_centers[1].unsqueeze(0)).sum(-1) < self.min_cluster_similarity
+        discard_3 = (normals_orthogonal[normal_clusters == 3] *
+                     cluster_centers[2].unsqueeze(0)).sum(-1) < self.min_cluster_similarity
+        normal_clusters[normal_clusters == 1][discard_1] = 0
+        normal_clusters[normal_clusters == 2][discard_2] = 0
+        normal_clusters[normal_clusters == 3][discard_3] = 0
+        normals_orthogonal = normals_orthogonal[normal_clusters != 0].contiguous()
+        normal_clusters = normal_clusters[normal_clusters != 0]
+
+        # Calculate losses
+        cluster_1 = normals_orthogonal[normal_clusters == 1]
+        cluster_2 = normals_orthogonal[normal_clusters == 2]
+        cluster_3 = normals_orthogonal[normal_clusters == 3]
+        c_1 = F.normalize(cluster_1.mean(dim = 0, keepdim = True), p = 2.0, dim = -1)
+        c_2 = F.normalize(cluster_2.mean(dim = 0, keepdim = True), p = 2.0, dim = -1)
+        c_3 = F.normalize(cluster_3.mean(dim = 0, keepdim = True), p = 2.0, dim = -1)
+        loss_orthogonal_dot  = torch.abs((c_1 * c_2).sum())
+        loss_orthogonal_dot += torch.abs((c_1 * c_3).sum())
+        loss_orthogonal_dot += torch.abs((c_2 * c_3).sum())
+        loss_orthogonal_dot /= 3.0
+        loss_cluster_dot  = 1.0 - (cluster_1 * c_1).sum(dim = -1).mean() 
+        loss_cluster_dot += 1.0 - (cluster_2 * c_2).sum(dim = -1).mean() 
+        loss_cluster_dot += 1.0 - (cluster_3 * c_3).sum(dim = -1).mean() 
+        loss_cluster_dot /= 3.0
+        loss_cluster_l1  = torch.abs(cluster_1 - c_1).sum(dim = -1).mean()
+        loss_cluster_l1 += torch.abs(cluster_2 - c_2).sum(dim = -1).mean()
+        loss_cluster_l1 += torch.abs(cluster_3 - c_3).sum(dim = -1).mean()
+        loss_cluster_l1 /= 3.0
+
+        loss_1 = self.weight_schedule(self.manhattan_orthogonal_dot_weight, step) * loss_orthogonal_dot
+        loss_2 = self.weight_schedule(self.normal_cluster_dot_weight, step) * loss_cluster_dot
+        loss_3 = self.weight_schedule(self.normal_cluster_l1_weight, step) * loss_cluster_l1
+        output_loss_dict = {
+            'manhattan_orthogonal_dot': _loss_validity_filter(loss_1, normals_orthogonal, 'manhattan_orthogonal_dot'),
+            'normal_cluster_dot': _loss_validity_filter(loss_2, normals_orthogonal, 'normal_cluster_dot'),
+            'normal_cluster_l1': _loss_validity_filter(loss_3, normals_orthogonal, 'normal_cluster_l1')
+        }
+        return output_loss_dict
+    
+def angular_error_normals_degree(pred: TensorType["num_samples", 3],
+                                 tgt: TensorType["num_samples", 3]) -> TensorType[0]:
+    """
+    Angular error between two normals calculated as dot product of the two normals,
+    and converted to degrees.
+    Args:
+        pred: estimated normal
+        tgt: ground truth normal
+    """
+
+    def _to_unit(x: torch.Tensor):
+        return x / (x.norm(p = 2, dim = -1, keepdim = True).detach() + 1e-8)
+    
+    dot_prod = torch.sum((_to_unit(pred) * _to_unit(tgt)), dim = -1)
+    ang_errs_rad = torch.acos(torch.clamp(dot_prod, -1, 1))
+    return ang_errs_rad * (180.0/math.pi)
