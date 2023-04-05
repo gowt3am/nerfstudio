@@ -94,7 +94,7 @@ class DepthNerfactoModel(NerfactoModel):
 
         return metrics_dict
 
-    def get_loss_dict(self, outputs, batch, metrics_dict=None):
+    def get_loss_dict(self, outputs, batch, step, metrics_dict=None):
         loss_dict = super().get_loss_dict(outputs, batch, metrics_dict)
         if self.training:
             assert metrics_dict is not None and "depth_loss" in metrics_dict

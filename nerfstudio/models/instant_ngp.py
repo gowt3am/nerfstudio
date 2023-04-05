@@ -219,7 +219,7 @@ class NGPModel(Model):
         metrics_dict["num_samples_per_batch"] = outputs["num_samples_per_ray"].sum()
         return metrics_dict
 
-    def get_loss_dict(self, outputs, batch, metrics_dict=None):
+    def get_loss_dict(self, outputs, batch, step, metrics_dict=None):
         image = batch["image"].to(self.device)
         mask = outputs["alive_ray_mask"]
         rgb_loss = self.rgb_loss(image[mask], outputs["rgb"][mask])

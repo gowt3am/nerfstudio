@@ -231,7 +231,7 @@ class SemanticNerfWModel(Model):
         metrics_dict["distortion"] = distortion_loss(outputs["weights_list"], outputs["ray_samples_list"])
         return metrics_dict
 
-    def get_loss_dict(self, outputs, batch, metrics_dict=None):
+    def get_loss_dict(self, outputs, batch, step, metrics_dict=None):
         loss_dict = {}
         image = batch["image"].to(self.device)
         loss_dict["interlevel_loss"] = self.config.interlevel_loss_mult * interlevel_loss(

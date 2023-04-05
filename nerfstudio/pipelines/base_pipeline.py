@@ -128,7 +128,7 @@ class Pipeline(nn.Module):
         ray_bundle, batch = self.datamanager.next_train(step)
         model_outputs = self.model(ray_bundle, batch)
         metrics_dict = self.model.get_metrics_dict(model_outputs, batch)
-        loss_dict = self.model.get_loss_dict(model_outputs, batch, metrics_dict)
+        loss_dict = self.model.get_loss_dict(model_outputs, batch, step, metrics_dict)
 
         return model_outputs, loss_dict, metrics_dict
 
@@ -147,7 +147,7 @@ class Pipeline(nn.Module):
         ray_bundle, batch = self.datamanager.next_eval(step)
         model_outputs = self.model(ray_bundle, batch)
         metrics_dict = self.model.get_metrics_dict(model_outputs, batch)
-        loss_dict = self.model.get_loss_dict(model_outputs, batch, metrics_dict)
+        loss_dict = self.model.get_loss_dict(model_outputs, batch, step, metrics_dict)
         self.train()
         return model_outputs, loss_dict, metrics_dict
 
@@ -276,7 +276,7 @@ class VanillaPipeline(Pipeline):
                     self.datamanager.get_param_groups()[camera_opt_param_group][0].data[:, 3:].norm()
                 )
 
-        loss_dict = self.model.get_loss_dict(model_outputs, batch, metrics_dict)
+        loss_dict = self.model.get_loss_dict(model_outputs, batch, step, metrics_dict)
 
         return model_outputs, loss_dict, metrics_dict
 
@@ -299,7 +299,7 @@ class VanillaPipeline(Pipeline):
         ray_bundle, batch = self.datamanager.next_eval(step)
         model_outputs = self.model(ray_bundle)
         metrics_dict = self.model.get_metrics_dict(model_outputs, batch)
-        loss_dict = self.model.get_loss_dict(model_outputs, batch, metrics_dict)
+        loss_dict = self.model.get_loss_dict(model_outputs, batch, step, metrics_dict)
         self.train()
         return model_outputs, loss_dict, metrics_dict
 

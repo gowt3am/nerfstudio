@@ -273,7 +273,7 @@ class SurfaceModel(Model):
         outputs["normal_vis"] = (outputs["normal"] + 1.0) / 2.0
         return outputs
 
-    def get_loss_dict(self, outputs, batch, metrics_dict=None) -> Dict[str, torch.Tensor]:
+    def get_loss_dict(self, outputs, batch, step, metrics_dict=None) -> Dict[str, torch.Tensor]:
         """Computes and returns the losses dict.
 
         Args:

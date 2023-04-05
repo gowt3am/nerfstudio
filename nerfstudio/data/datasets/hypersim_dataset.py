@@ -41,8 +41,7 @@ class HyperSimDataset(InputDataset):
                  labels: List[str] = []):
         super().__init__(dataparser_outputs, scale_factor)
         self.labels = labels
-        self.image_filenames = self._dataparser_outputs.image_filenames
-        
+        self.img_filenames = dataparser_outputs.image_filenames
         self.depth_filenames = self.metadata["depth_filenames"]
         self.normal_filenames = self.metadata["normal_filenames"]
         self.semantic_filenames = self.metadata["semantic_filenames"]
@@ -65,17 +64,17 @@ class HyperSimDataset(InputDataset):
         Args:
             image_idx: The image index in the dataset.
         """
-        image_filename = self.image_filenames[image_idx]
+        image_filename = self.img_filenames[image_idx]
         hdr_image = h5py.File(image_filename, 'r')['dataset'][:].astype('float32')
         render_entity_id_filename = self.entity_id_filenames[image_idx]
         render_entity_id = h5py.File(render_entity_id_filename, 'r')['dataset'][:].astype('int32')
         image = self._tonemapping(hdr_image, render_entity_id)
 
         # rescaled shape should be (h, w, 3), and then normalized to [0, 1]
-        image = self._downscale_content(torch.from_numpy(image), "color")
+        image = self._downscale_content(torch.from_numpy(image.astype('float32')), "color")
         assert len(image.shape) == 3
         assert image.shape[2] == 3, f"Image shape of {image.shape} is incorrect."
-        return image.astype("float32") / 255.0
+        return image / 255.0
 
     def _tonemapping(self, hdr_image: np.ndarray, render_entity_id: np.ndarray) -> np.ndarray:
         """From https://github.com/apple/ml-hypersim/blob/main/code/python/tools/scene_generate_images_tonemap.py

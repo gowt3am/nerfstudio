@@ -27,11 +27,13 @@ from nerfstudio.cameras.camera_optimizers import CameraOptimizerConfig
 from nerfstudio.configs.base_config import ViewerConfig
 from nerfstudio.data.datamanagers.base_datamanager import VanillaDataManagerConfig
 from nerfstudio.data.datamanagers.depth_datamanager import DepthDataManagerConfig
+from nerfstudio.data.datamanagers.hypersim_datamanager import HyperSimDataManagerConfig
 from nerfstudio.data.datamanagers.sdf_datamanager import SDFDataManagerConfig
 from nerfstudio.data.datamanagers.semantic_datamanager import SemanticDataManagerConfig
 from nerfstudio.data.dataparsers.blender_dataparser import BlenderDataParserConfig
 from nerfstudio.data.dataparsers.dnerf_dataparser import DNeRFDataParserConfig
 from nerfstudio.data.dataparsers.dycheck_dataparser import DycheckDataParserConfig
+from nerfstudio.data.dataparsers.hypersim_dataparser import HyperSimDataParserConfig
 from nerfstudio.data.dataparsers.instant_ngp_dataparser import (
     InstantNGPDataParserConfig,
 )
@@ -50,6 +52,7 @@ from nerfstudio.engine.trainer import TrainerConfig
 from nerfstudio.field_components.temporal_distortions import TemporalDistortionKind
 from nerfstudio.models.depth_nerfacto import DepthNerfactoModelConfig
 from nerfstudio.models.instant_ngp import InstantNGPModelConfig
+from nerfstudio.models.manhattan_nerf import ManhattanNeRFModelConfig
 from nerfstudio.models.mipnerf import MipNerfModel
 from nerfstudio.models.nerfacto import NerfactoModelConfig
 from nerfstudio.models.nerfplayer_nerfacto import NerfplayerNerfactoModelConfig
@@ -64,6 +67,9 @@ from nerfstudio.plugins.registry import discover_methods
 
 method_configs: Dict[str, TrainerConfig] = {}
 descriptions = {
+    "manhat-nerf": "ManhattanNeRF with Instant-NGP backbone, normal estimation, clustering and manhattan losses (currently only works with hypersim)",
+    "manhat-nerf-base-hypersim": "ManhattanNeRF code, but only baseline Instant-NGP, with hypersim dataset",
+    "manhat-nerf-base": "ManhattanNeRF code, but only baseline Instant-NGP",
     "nerfacto": "Recommended real-time model tuned for real captures. This model will be continually updated.",
     "depth-nerfacto": "Nerfacto with depth supervision.",
     "volinga": "Real-time rendering model from Volinga. Directly exportable to NVOL format at https://volinga.ai/",
@@ -79,6 +85,79 @@ descriptions = {
     "nerfplayer-ngp": "NeRFPlayer with InstantNGP backbone.",
     "neus": "Implementation of NeuS. (slow)",
 }
+
+method_configs["manhattan-nerf"] = TrainerConfig(
+    method_name="manhattan-nerf",
+    steps_per_eval_batch=500,
+    steps_per_save=2000,
+    max_num_iterations=30000,
+    mixed_precision=True,
+    pipeline=DynamicBatchPipelineConfig(
+        datamanager=HyperSimDataManagerConfig(dataparser=HyperSimDataParserConfig(),
+                                              train_num_rays_per_batch=8192,
+                                              labels=["normals"]),
+        model=ManhattanNeRFModelConfig(eval_num_rays_per_chunk=4096, calc_normal_metrics=True),
+    ),
+    optimizers={
+        "fields": {
+            "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-15),
+            "scheduler": None,
+        }
+    },
+    viewer=ViewerConfig(num_rays_per_chunk=64000),
+    vis="viewer",
+)
+
+method_configs["manhattan-nerf-base-hypersim"] = TrainerConfig(
+    method_name="manhattan-nerf-base-hypersim",
+    steps_per_eval_batch=500,
+    steps_per_save=2000,
+    max_num_iterations=30000,
+    mixed_precision=True,
+    pipeline=DynamicBatchPipelineConfig(
+        datamanager=HyperSimDataManagerConfig(dataparser=HyperSimDataParserConfig(),
+                                              train_num_rays_per_batch=8192,
+                                              ray_sampling_strategy="uniform"),
+        model=ManhattanNeRFModelConfig(eval_num_rays_per_chunk=4096,
+                                       opacity_penalty_weight=-1.0,
+                                       manhattan_orthogonal_dot_weight=-1.0,
+                                       normal_manhattan_cluster_dot_weight=-1.0,
+                                       normal_manhattan_cluster_l1_weight=-1.0),
+    ),
+    optimizers={
+        "fields": {
+            "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-15),
+            "scheduler": None,
+        }
+    },
+    viewer=ViewerConfig(num_rays_per_chunk=64000),
+    vis="viewer",
+)
+
+method_configs["manhattan-nerf-base"] = TrainerConfig(
+    method_name="manhattan-nerf-base",
+    steps_per_eval_batch=500,
+    steps_per_save=2000,
+    max_num_iterations=30000,
+    mixed_precision=True,
+    pipeline=DynamicBatchPipelineConfig(
+        datamanager=VanillaDataManagerConfig(dataparser=NerfstudioDataParserConfig(),
+                                             train_num_rays_per_batch=8192),
+        model=ManhattanNeRFModelConfig(eval_num_rays_per_chunk=4096,
+                                       opacity_penalty_weight=-1.0,
+                                       manhattan_orthogonal_dot_weight=-1.0,
+                                       normal_manhattan_cluster_dot_weight=-1.0,
+                                       normal_manhattan_cluster_l1_weight=-1.0),
+    ),
+    optimizers={
+        "fields": {
+            "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-15),
+            "scheduler": None,
+        }
+    },
+    viewer=ViewerConfig(num_rays_per_chunk=64000),
+    vis="viewer",
+)
 
 method_configs["nerfacto"] = TrainerConfig(
     method_name="nerfacto",
@@ -191,7 +270,7 @@ method_configs["instant-ngp"] = TrainerConfig(
     mixed_precision=True,
     pipeline=DynamicBatchPipelineConfig(
         datamanager=VanillaDataManagerConfig(dataparser=NerfstudioDataParserConfig(), train_num_rays_per_batch=8192),
-        model=InstantNGPModelConfig(eval_num_rays_per_chunk=8192),
+        model=InstantNGPModelConfig(eval_num_rays_per_chunk=4096),
     ),
     optimizers={
         "fields": {
@@ -213,7 +292,7 @@ method_configs["instant-ngp-bounded"] = TrainerConfig(
     pipeline=DynamicBatchPipelineConfig(
         datamanager=VanillaDataManagerConfig(dataparser=InstantNGPDataParserConfig(), train_num_rays_per_batch=8192),
         model=InstantNGPModelConfig(
-            eval_num_rays_per_chunk=8192,
+            eval_num_rays_per_chunk=4096,
             contraction_type=ContractionType.AABB,
             render_step_size=0.001,
             max_num_samples_per_ray=48,
@@ -424,7 +503,7 @@ method_configs["nerfplayer-ngp"] = TrainerConfig(
     pipeline=DynamicBatchPipelineConfig(
         datamanager=DepthDataManagerConfig(dataparser=DycheckDataParserConfig(), train_num_rays_per_batch=8192),
         model=NerfplayerNGPModelConfig(
-            eval_num_rays_per_chunk=8192,
+            eval_num_rays_per_chunk=4096,
             contraction_type=ContractionType.AABB,
             render_step_size=0.001,
             max_num_samples_per_ray=48,

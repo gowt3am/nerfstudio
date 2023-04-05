@@ -17,8 +17,9 @@ HyperSim datamanager.
 """
 
 from dataclasses import dataclass, field
-from typing import Type, List, Any
+from typing import Type, List, Any, Union, Literal
 
+import torch
 from nerfstudio.data.datamanagers.base_datamanager import (
     VanillaDataManager,
     VanillaDataManagerConfig,
@@ -32,7 +33,7 @@ class HyperSimDataManagerConfig(VanillaDataManagerConfig):
     """A hypersim datamanager - required to use with .setup()"""
     _target: Type = field(default_factory=lambda: HyperSimDataManager)
     
-    labels: List[str] = ["depth", "normals"]
+    labels: List[str] = field(default_factory=lambda: [])
     """Labels/Files to load"""
     ray_sampling_strategy: str = "triangle"
     """The ray sampling strategy to use. Options are "triangle" and "uniform"."""
@@ -47,8 +48,15 @@ class HyperSimDataManager(VanillaDataManager):  # pylint: disable=abstract-metho
     """
     config: HyperSimDataManagerConfig
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self,
+        config: HyperSimDataManagerConfig,
+        device: Union[torch.device, str] = "cpu",
+        test_mode: Literal["test", "val", "inference"] = "val",
+        world_size: int = 1,
+        local_rank: int = 0,
+        **kwargs,  # pylint: disable=unused-argument
+    ):
+        super().__init__(config, device, test_mode, world_size, local_rank, **kwargs)
         self.H_orig = self.train_dataparser_outputs.metadata["H_orig"]
         self.W_orig = self.train_dataparser_outputs.metadata["W_orig"]
         self.H = int(self.H_orig * self.config.camera_res_scale_factor)

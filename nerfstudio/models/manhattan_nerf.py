@@ -64,9 +64,7 @@ from nerfstudio.data.utils.data_utils import hypersim_normals_from_ray_depths
 class ManhattanNeRFModelConfig(ModelConfig):
     """Instant NGP Model Config"""
 
-    _target: Type = field(
-        default_factory=lambda: ManhattanNeRFModel
-    )  # We can't write `NGPModel` directly, because `NGPModel` doesn't exist yet
+    _target: Type = field(default_factory=lambda: ManhattanNeRFModel)
     """target class to instantiate"""
     enable_collider: bool = False
     """Whether to create a scene collider to filter rays."""
@@ -112,8 +110,6 @@ class ManhattanNeRFModelConfig(ModelConfig):
     manhattan_loss_stop_step: int = -1
     """Step at which to stop using manhattan loss. -1 will never stop."""
 
-    calc_LPIPS_metric: bool = False
-    """Whether to calculate LPIPS loss."""
     calc_depth_metrics: bool = False
     """Whether to calculate depth metrics."""
     calc_normal_metrics: bool = False
@@ -121,12 +117,7 @@ class ManhattanNeRFModelConfig(ModelConfig):
 
 
 class ManhattanNeRFModel(Model):
-    """Instant NGP model
-
-    Args:
-        config: instant NGP configuration to instantiate model
-    """
-
+    """Manhattan NeRF model - Instant NGP backbone + normal estimation and losses"""
     config: ManhattanNeRFModelConfig
     field: TCNNInstantNGPField
 
@@ -177,9 +168,9 @@ class ManhattanNeRFModel(Model):
         self.opacity_loss = OpacityLoss()
         self.manhattan_normal_loss = ManhattanNormalLoss(
             min_cluster_similarity=self.config.min_cluster_similarity,
-            orthogonal_dot_weight=self.config.manhattan_orthogonal_dot_weight,
-            cluster_dot_weight=self.config.normal_manhattan_cluster_dot_weight,
-            cluster_l1_weight=self.config.normal_manhattan_cluster_l1_weight,
+            manhattan_orthogonal_dot_weight=self.config.manhattan_orthogonal_dot_weight,
+            normal_manhattan_dot_weight=self.config.normal_manhattan_cluster_dot_weight,
+            normal_manhattan_l1_weight=self.config.normal_manhattan_cluster_l1_weight,
             start_step=self.config.manhattan_loss_start_step,
             grow_till_step=self.config.manhattan_loss_grow_till_step,
             end_step=self.config.manhattan_loss_stop_step
@@ -277,13 +268,10 @@ class ManhattanNeRFModel(Model):
         return outputs
 
     def get_metrics_dict(self, outputs, batch):
+        """ Done during training, so avoid using image-level metrics such as SSIM, LPIPS, etc. """
         metrics_dict = {}
         
         metrics_dict["psnr"] = self.psnr_rgb(outputs["rgb"], batch["image"].to(self.device))
-        metrics_dict["ssim"] = self.ssim_rgb(outputs["rgb"], batch["image"].to(self.device))
-        if self.config.calc_LPIPS_metric:
-            metrics_dict["lpips"] = self.lpips_rgb(outputs["rgb"], batch["image"].to(self.device))
-        
         if self.config.calc_depth_metrics:
             metrics_dict["rmse_depth"] = self.rmse_depth(outputs["depth"], batch["depth"].to(self.device))
             metrics_dict["abs_depth"] = self.abs_depth(outputs["depth"], batch["depth"].to(self.device))
@@ -331,11 +319,9 @@ class ManhattanNeRFModel(Model):
         
         psnr = self.psnr_rgb(tgt_image, pred_rgb)
         ssim = self.ssim_rgb(tgt_image, pred_rgb)
-        metrics_dict = {"psnr": float(psnr),
-                        "ssim": float(ssim)}
-        if self.config.calc_LPIPS_metric:
-            metrics_dict.update({"lpips" : self.lpips_rgb(tgt_image, pred_rgb)})
-        
+        lpips = self.lpips_rgb(tgt_image, pred_rgb)
+        metrics_dict = {"psnr": float(psnr), "ssim": float(ssim), "lpips": float(lpips)}
+
         if self.config.calc_depth_metrics:
             tgt_depth = batch["depth"].to(self.device)
             pred_depth = outputs["depth"]

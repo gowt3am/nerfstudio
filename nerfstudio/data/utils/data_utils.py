@@ -92,9 +92,7 @@ def get_depth_image_from_path(
 
 
 """ ############## Complex HyperSim Dataset Utils ############## """
-def hypersim_generate_camera_rays(size: Tuple(int, int) = (768, 1024),
-                                  M_cam_from_uv: TensorType = None) -> \
-                                  Tuple(TensorType, TensorType, TensorType):
+def hypersim_generate_camera_rays(size: Tuple, M_cam_from_uv: TensorType = None) -> Tuple:
     """Create grid of camera rays in camera coordinates"""
     height, width = size
 

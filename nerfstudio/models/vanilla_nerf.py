@@ -181,7 +181,7 @@ class NeRFModel(Model):
         }
         return outputs
 
-    def get_loss_dict(self, outputs, batch, metrics_dict=None) -> Dict[str, torch.Tensor]:
+    def get_loss_dict(self, outputs, batch, step, metrics_dict=None) -> Dict[str, torch.Tensor]:
         # Scaling metrics by coefficients to create the losses.
         device = outputs["rgb_coarse"].device
         image = batch["image"].to(device)

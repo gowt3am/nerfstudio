@@ -62,7 +62,7 @@ class HyperSimDataParserConfig(DataParserConfig):
     """target class to instantiate"""
     data: Path = Path("data/hypersim/ai_001_001")
     """Path to HyperSim folder with extracted scenes."""
-    cam_ids: List[str] = ["cam_00"]
+    cam_ids: List[str] = field(default_factory=lambda: ["cam_00"])
     """Camera id/trajectory used"""
     split_factor: float = 0.5
     """Fraction of images to use for training. Remaining for eval."""
@@ -144,24 +144,24 @@ class HyperSim(DataParser):
         print(f'Extracting cameras and their corresponding images')
 
         # By default we use only cam_00 for all scenes, however if not available, switch to cam_01
-        if self.cam_ids == ['cam_00'] and 'cam_00' not in self.scene_metadata['cams']:
-            self.cam_ids = ['cam_01']
+        if self.config.cam_ids == ['cam_00'] and 'cam_00' not in self.scene_metadata['cams']:
+            self.config.cam_ids = ['cam_01']
             print('Scene did not have cam_00, switching to use cam_01...')
 
         # Go over each selected camera trajectory and append its image ids as cam_id.img_id
         self.all_img_ids = {}
         self.cams = []
-        for cur_cam_id in self.cam_ids:
+        for cur_cam_id in self.config.cam_ids:
             self.cams.append(cur_cam_id)
             self.all_img_ids[cur_cam_id] = []
             for img in self.scene_metadata['cams'][cur_cam_id]['img_names']:
-                full_img_name = self.imgs_root_dir / f'scene_{cur_cam_id}_final_hdf5' / img
+                full_img_name = self.config.data / 'images' / f'scene_{cur_cam_id}_final_hdf5' / img
                 if full_img_name.exists() and h5py.is_hdf5(full_img_name):
                     self.all_img_ids[cur_cam_id].append(f'{cur_cam_id}.{img.split(".")[1]}')
             
         # Assert that we have at least one image
-        assert len(self.all_img_ids[self.cam_ids[0]]) > 0
-        print(f'Loaded {len(self.cam_ids)} cameras')
+        assert len(self.all_img_ids[self.config.cam_ids[0]]) > 0
+        print(f'Loaded {len(self.config.cam_ids)} cameras')
         print(f'Loaded {sum([len(self.all_img_ids[k]) for k in self.all_img_ids.keys()])} image ids in total')
 
     def _generate_data_splits(self, split: str = 'train'):
@@ -170,7 +170,7 @@ class HyperSim(DataParser):
         self.img_ids = []
         for cam_id in self.all_img_ids.keys():
             cur_img_ids = self.all_img_ids[cam_id]
-            split_point = round(self.split_factor * len(cur_img_ids))
+            split_point = round(self.config.split_factor * len(cur_img_ids))
             
             # Image ids are already randomized
             if split == 'train':
@@ -184,18 +184,18 @@ class HyperSim(DataParser):
             # Sort after split
             cur_img_ids.sort()
             self.img_ids.extend(cur_img_ids)
-        self.all_image_names = [self.config.data / 'images' / 'scene_' + x.split('.')[0] +
-            '_final_hdf5' / 'frame.' + x.split('.')[-1] + 'color.hdf5' for x in self.img_ids]
-        self.all_depth_names = [self.config.data / 'images' / 'scene_' + x.split('.')[0] +
-            '_geometry_hdf5' / 'frame.' + x.split('.')[-1] + 'depth_meters.hdf5' for x in self.img_ids]
-        self.all_normal_names = [self.config.data / 'images' / 'scene_' + x.split('.')[0] +
-            '_geometry_hdf5' / 'frame.' + x.split('.')[-1] + 'normal_bump_world.hdf5' for x in self.img_ids]
-        self.all_semantic_names =  [self.config.data / 'images' / 'scene_' + x.split('.')[0] +
-            '_geometry_hdf5' / 'frame.' + x.split('.')[-1] + 'semantic.hdf5' for x in self.img_ids]
-        self.all_semantic_instance_names = [self.config.data / 'images' / 'scene_' + x.split('.')[0] +
-            '_geometry_hdf5' / 'frame.' + x.split('.')[-1] + 'semantic_instance.hdf5' for x in self.img_ids]
-        self.all_entity_id_names = [self.config.data / 'images' / 'scene_' + x.split('.')[0] +
-            '_geometry_hdf5' / 'frame.' + x.split('.')[-1] + 'render_entity_id.hdf5' for x in self.img_ids]
+        self.all_image_names = [str(self.config.data) + '/images/scene_' + x.split('.')[0] +
+            '_final_hdf5/frame.' + x.split('.')[-1] + '.color.hdf5' for x in self.img_ids]
+        self.all_depth_names = [str(self.config.data) + '/images/scene_' + x.split('.')[0] +
+            '_geometry_hdf5/frame.' + x.split('.')[-1] + '.depth_meters.hdf5' for x in self.img_ids]
+        self.all_normal_names = [str(self.config.data) + '/images/scene_' + x.split('.')[0] +
+            '_geometry_hdf5/frame.' + x.split('.')[-1] + '.normal_bump_world.hdf5' for x in self.img_ids]
+        self.all_semantic_names =  [str(self.config.data) + '/images/scene_' + x.split('.')[0] +
+            '_geometry_hdf5/frame.' + x.split('.')[-1] + '.semantic.hdf5' for x in self.img_ids]
+        self.all_semantic_instance_names = [str(self.config.data) + '/images/scene_' + x.split('.')[0] +
+            '_geometry_hdf5/frame.' + x.split('.')[-1] + '.semantic_instance.hdf5' for x in self.img_ids]
+        self.all_entity_id_names = [str(self.config.data) + '/images/scene_' + x.split('.')[0] +
+            '_geometry_hdf5/frame.' + x.split('.')[-1] + '.render_entity_id.hdf5' for x in self.img_ids]
         print(f'Extracted the {split} which contains {len(self.img_ids)} images')
 
     def _create_cam_model(self):
@@ -239,7 +239,7 @@ class HyperSim(DataParser):
         print(f'Loading Camera Extrinsics...')
         # Load (unordered) camera poses for all camera trajectories
         cam_poses_all_cams = {}
-        for cam_id in self.cam_ids:
+        for cam_id in self.config.cam_ids:
             # Scale to meters - cam_poses[:3, 3] *= self.config.m_per_asset_unit
             cam_poses_all_cams[cam_id] = self._load_cam_poses_single_cam(cam_id)
 
