@@ -140,7 +140,7 @@ class NerfplayerNGPModel(NGPModel):
         self.lpips = LearnedPerceptualImagePatchSimilarity(normalize=True)
         self.temporal_distortion = True  # for viewer
 
-    def get_outputs(self, ray_bundle: RayBundle):
+    def get_outputs(self, ray_bundle: RayBundle, **kwargs):
         num_rays = len(ray_bundle)
 
         # update the density_fn of the sampler so that the density is time aware

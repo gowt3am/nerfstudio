@@ -167,7 +167,7 @@ class NGPModel(Model):
         param_groups["fields"] = list(self.field.parameters())
         return param_groups
 
-    def get_outputs(self, ray_bundle: RayBundle):
+    def get_outputs(self, ray_bundle: RayBundle, **kwargs):
         assert self.field is not None
         num_rays = len(ray_bundle)
 

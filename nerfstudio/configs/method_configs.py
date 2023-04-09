@@ -52,7 +52,8 @@ from nerfstudio.engine.trainer import TrainerConfig
 from nerfstudio.field_components.temporal_distortions import TemporalDistortionKind
 from nerfstudio.models.depth_nerfacto import DepthNerfactoModelConfig
 from nerfstudio.models.instant_ngp import InstantNGPModelConfig
-from nerfstudio.models.manhattan_nerf import ManhattanNeRFModelConfig
+from nerfstudio.models.manhattan_ingp import ManhattanINGPModelConfig
+from nerfstudio.models.manhattan_nerfacto import ManhattanNerfactoModelConfig
 from nerfstudio.models.mipnerf import MipNerfModel
 from nerfstudio.models.nerfacto import NerfactoModelConfig
 from nerfstudio.models.nerfplayer_nerfacto import NerfplayerNerfactoModelConfig
@@ -67,9 +68,8 @@ from nerfstudio.plugins.registry import discover_methods
 
 method_configs: Dict[str, TrainerConfig] = {}
 descriptions = {
-    "manhat-nerf": "ManhattanNeRF with Instant-NGP backbone, normal estimation, clustering and manhattan losses (currently only works with hypersim)",
-    "manhat-nerf-base-hypersim": "ManhattanNeRF code, but only baseline Instant-NGP, with hypersim dataset",
-    "manhat-nerf-base": "ManhattanNeRF code, but only baseline Instant-NGP",
+    "manhattan-nerfacto": "Same as Manhattan-INGP but with Nerfacto backbone (currently only works with hypersim)",
+    "manhattan-ingp": "ManhattanNeRF with Instant-NGP backbone, normal estimation, clustering and manhattan losses (currently only works with hypersim)",
     "nerfacto": "Recommended real-time model tuned for real captures. This model will be continually updated.",
     "depth-nerfacto": "Nerfacto with depth supervision.",
     "volinga": "Real-time rendering model from Volinga. Directly exportable to NVOL format at https://volinga.ai/",
@@ -86,64 +86,61 @@ descriptions = {
     "neus": "Implementation of NeuS. (slow)",
 }
 
-method_configs["manhattan-nerf"] = TrainerConfig(
-    method_name="manhattan-nerf",
-    steps_per_eval_batch=500,
+method_configs["manhattan-nerfacto"] = TrainerConfig(
+    method_name="manhattan-nerfacto",
+    steps_per_eval_batch=1000,
+    steps_per_eval_image=1000,
+    steps_per_save=2000,
+    max_num_iterations=30000,
+    mixed_precision=True,
+    pipeline=VanillaPipelineConfig(
+        datamanager=HyperSimDataManagerConfig(
+            dataparser=HyperSimDataParserConfig(),
+            train_num_rays_per_batch=4095,
+            eval_num_rays_per_batch=4095,
+            camera_optimizer=CameraOptimizerConfig(
+                mode="SO3xR3", optimizer=AdamOptimizerConfig(lr=6e-4, eps=1e-8, weight_decay=1e-2)
+            ),
+            labels=["normals"],
+            ray_sampling_strategy="triangle"
+        ),
+        model=ManhattanNerfactoModelConfig(eval_num_rays_per_chunk=1 << 15,
+                                           near_plane=0.005,
+                                           calc_normal_metrics=True,
+                                           opacity_penalty_weight=1e-3,
+                                           manhattan_orthogonal_dot_weight=2e-3,
+                                           normal_manhattan_cluster_dot_weight=2e-3,
+                                           normal_manhattan_cluster_l1_weight=2e-3),
+    ),
+    optimizers={
+        "proposal_networks": {
+            "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-15),
+            "scheduler": None,
+        },
+        "fields": {
+            "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-15),
+            "scheduler": None,
+        },
+    },
+    viewer=ViewerConfig(num_rays_per_chunk=1 << 15),
+    vis="viewer",
+)
+
+method_configs["manhattan-ingp"] = TrainerConfig(
+    method_name="manhattan-ingp",
+    steps_per_eval_batch=1000,
+    steps_per_eval_image=1000,
     steps_per_save=2000,
     max_num_iterations=30000,
     mixed_precision=True,
     pipeline=DynamicBatchPipelineConfig(
         datamanager=HyperSimDataManagerConfig(dataparser=HyperSimDataParserConfig(),
-                                              train_num_rays_per_batch=8192,
-                                              labels=["normals"]),
-        model=ManhattanNeRFModelConfig(eval_num_rays_per_chunk=4096, calc_normal_metrics=True),
-    ),
-    optimizers={
-        "fields": {
-            "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-15),
-            "scheduler": None,
-        }
-    },
-    viewer=ViewerConfig(num_rays_per_chunk=64000),
-    vis="viewer",
-)
-
-method_configs["manhattan-nerf-base-hypersim"] = TrainerConfig(
-    method_name="manhattan-nerf-base-hypersim",
-    steps_per_eval_batch=500,
-    steps_per_save=2000,
-    max_num_iterations=30000,
-    mixed_precision=True,
-    pipeline=DynamicBatchPipelineConfig(
-        datamanager=HyperSimDataManagerConfig(dataparser=HyperSimDataParserConfig(),
-                                              train_num_rays_per_batch=8192,
-                                              ray_sampling_strategy="uniform"),
-        model=ManhattanNeRFModelConfig(eval_num_rays_per_chunk=4096,
-                                       opacity_penalty_weight=-1.0,
-                                       manhattan_orthogonal_dot_weight=-1.0,
-                                       normal_manhattan_cluster_dot_weight=-1.0,
-                                       normal_manhattan_cluster_l1_weight=-1.0),
-    ),
-    optimizers={
-        "fields": {
-            "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-15),
-            "scheduler": None,
-        }
-    },
-    viewer=ViewerConfig(num_rays_per_chunk=64000),
-    vis="viewer",
-)
-
-method_configs["manhattan-nerf-base"] = TrainerConfig(
-    method_name="manhattan-nerf-base",
-    steps_per_eval_batch=500,
-    steps_per_save=2000,
-    max_num_iterations=30000,
-    mixed_precision=True,
-    pipeline=DynamicBatchPipelineConfig(
-        datamanager=VanillaDataManagerConfig(dataparser=NerfstudioDataParserConfig(),
-                                             train_num_rays_per_batch=8192),
-        model=ManhattanNeRFModelConfig(eval_num_rays_per_chunk=4096,
+                                              train_num_rays_per_batch=8190,
+                                              labels=["normals"],
+                                              ray_sampling_strategy="triangle"),
+        model=ManhattanINGPModelConfig(near_plane=0.005,
+                                       eval_num_rays_per_chunk=4095,
+                                       calc_normal_metrics=False,
                                        opacity_penalty_weight=-1.0,
                                        manhattan_orthogonal_dot_weight=-1.0,
                                        normal_manhattan_cluster_dot_weight=-1.0,

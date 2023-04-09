@@ -318,8 +318,8 @@ class TrianglePixelSampler(PixelSampler):
         With dilation rate 1:
         ____|____|_x2_|____|____
         ____|____|____|____|____
-        _x3_|____|____|____|____
-        ____|____|_x1_|____|____  
+        _x3_|____|_x1_|____|____
+        ____|____|____|____|____  
         ____|____|____|____|____
     Args:
         num_rays_per_batch: number of rays to sample per batch (will be divided by 3 for triangles)
@@ -327,9 +327,8 @@ class TrianglePixelSampler(PixelSampler):
     """
     def __init__(self, num_rays_per_batch: int, keep_full_image: bool = False, **kwargs) -> None:
         # Make number of rays per batch is divisible by 3
-        self.num_triangs = num_rays_per_batch // 3
-        self.batch_size = self.num_triangs * 3
-        super().__init__(self.batch_size, keep_full_image, **kwargs)
+        num_rays_per_batch = (num_rays_per_batch // 3) * 3
+        super().__init__(num_rays_per_batch, keep_full_image, **kwargs)
         self.dilaion_rate = kwargs["dilation_rate"]
         self.height = kwargs["height"]
         self.width = kwargs["width"]
@@ -349,6 +348,13 @@ class TrianglePixelSampler(PixelSampler):
             'x2': rearrange(img_indices[:-2, 1:-1], 'h w -> (h w)'),
             'x3': rearrange(img_indices[1:-1, :-2], 'h w -> (h w)')}
     
+    def set_num_rays_per_batch(self, num_rays_per_batch: int):
+        """Set the number of rays to sample per batch. Overrided to make it divisible by 3.
+        Args:
+            num_rays_per_batch: number of rays to sample per batch
+        """
+        self.num_rays_per_batch = (num_rays_per_batch // 3) * 3
+
     def sample_method(  # pylint: disable=no-self-use
         self,
         batch_size: int,
@@ -361,8 +367,8 @@ class TrianglePixelSampler(PixelSampler):
         if mask is not None:
             raise NotImplementedError("Masking not implemented for TrianglePixelSampler")
         
-        image_indices = np.random.choice(num_images, self.num_triangs)
-        triangle_indices = np.random.choice(self.valid_idx['x1'].shape[0], self.num_triangs)
+        image_indices = np.random.choice(num_images, batch_size//3)
+        triangle_indices = np.random.choice(self.valid_idx['x1'].shape[0], batch_size//3)
         x1_indices = self.valid_idx['x1'][triangle_indices]
         x2_indices = self.valid_idx['x2'][triangle_indices]
         x3_indices = self.valid_idx['x3'][triangle_indices]
@@ -381,4 +387,4 @@ class TrianglePixelSampler(PixelSampler):
         pixel_indices = np.concatenate((x1_indices, x2_indices, x3_indices), axis=0)
         
         return torch.from_numpy(np.stack((image_indices, pixel_indices // self.width,
-                                pixel_indices % self.width), axis=1), device=device)
+                                pixel_indices % self.width), axis=1)).to(device)

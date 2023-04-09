@@ -525,7 +525,6 @@ class OpacityLoss(nn.Module):
     """Encourages opacity to be either 0 or 1 to avoid floater"""
     def __init__(self):
         super().__init__()
-        self.mse = MSELoss()
 
     def forward(self, opacity: TensorType) -> TensorType:
         op = opacity + 1e-10
@@ -561,11 +560,15 @@ class ManhattanNormalLoss(nn.Module):
         self.weight_schedule = lambda weight, step : max(0, min(weight, \
                     weight * (step - start_step) / (grow_till_step - start_step)))
 
-    def forward(self, normals: TensorType, valid_normals: TensorType, step: int) -> TensorType:
+    def forward(self, normals: TensorType, step: int) -> TensorType:
         if ((self.end_step != -1) and (step >= self.end_step)) or step < self.start_step:
-            return torch.tensor(0.0, device=normals.device)
+            output_loss_dict = {
+                'manhattan_orthogonal_dot': torch.tensor(0.0, device=normals.device),
+                'normal_cluster_dot': torch.tensor(0.0, device=normals.device),
+                'normal_cluster_l1': torch.tensor(0.0, device=normals.device)
+            }
+            return output_loss_dict
         
-        normals = normals[valid_normals]
         normal_clusters, cluster_centers = _cluster_normals(
                     normals = normals.detach().contiguous().cpu().numpy(), 
                     device = normals.device, num_clusters = 20, num_iterations = 20,
@@ -636,4 +639,4 @@ def angular_error_normals_degree(pred: TensorType["num_samples", 3],
     
     dot_prod = torch.sum((_to_unit(pred) * _to_unit(tgt)), dim = -1)
     ang_errs_rad = torch.acos(torch.clamp(dot_prod, -1, 1))
-    return ang_errs_rad * (180.0/math.pi)
+    return ang_errs_rad.mean() * (180.0/math.pi)

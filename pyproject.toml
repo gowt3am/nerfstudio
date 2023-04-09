@@ -55,7 +55,8 @@ dependencies = [
     "nuscenes-devkit>=1.1.1",
     "wandb>=0.13.3",
     "xatlas",
-    "einops"
+    "einops",
+    "pandas"
 ]
 
 [project.urls]

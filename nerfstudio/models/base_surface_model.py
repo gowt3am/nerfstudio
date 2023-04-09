@@ -192,7 +192,7 @@ class SurfaceModel(Model):
             Outputs of model. (ie. rendered colors)
         """
 
-    def get_outputs(self, ray_bundle: RayBundle) -> Dict[str, torch.Tensor]:
+    def get_outputs(self, ray_bundle: RayBundle, **kwargs) -> Dict[str, torch.Tensor]:
         """Takes in a Ray Bundle and returns a dictionary of outputs.
 
         Args:

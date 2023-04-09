@@ -134,7 +134,7 @@ class NeRFModel(Model):
             param_groups["temporal_distortion"] = list(self.temporal_distortion.parameters())
         return param_groups
 
-    def get_outputs(self, ray_bundle: RayBundle):
+    def get_outputs(self, ray_bundle: RayBundle, **kwargs):
 
         if self.field_coarse is None or self.field_fine is None:
             raise ValueError("populate_fields() must be called before get_outputs")

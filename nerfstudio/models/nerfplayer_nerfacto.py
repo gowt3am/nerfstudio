@@ -175,7 +175,7 @@ class NerfplayerNerfactoModel(NerfactoModel):
         self.lpips = LearnedPerceptualImagePatchSimilarity(normalize=True)
         self.temporal_distortion = True  # for viewer
 
-    def get_outputs(self, ray_bundle: RayBundle):
+    def get_outputs(self, ray_bundle: RayBundle, **kwargs):
         assert ray_bundle.times is not None, "Time not provided."
         ray_samples, weights_list, ray_samples_list = self.proposal_sampler(
             ray_bundle, density_fns=[functools.partial(f, times=ray_bundle.times) for f in self.density_fns]

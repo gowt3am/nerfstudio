@@ -61,10 +61,10 @@ from nerfstudio.data.utils.data_utils import hypersim_normals_from_ray_depths
 
 
 @dataclass
-class ManhattanNeRFModelConfig(ModelConfig):
+class ManhattanINGPModelConfig(ModelConfig):
     """Instant NGP Model Config"""
 
-    _target: Type = field(default_factory=lambda: ManhattanNeRFModel)
+    _target: Type = field(default_factory=lambda: ManhattanINGPModel)
     """target class to instantiate"""
     enable_collider: bool = False
     """Whether to create a scene collider to filter rays."""
@@ -116,12 +116,12 @@ class ManhattanNeRFModelConfig(ModelConfig):
     """Whether to calculate normal metrics."""
 
 
-class ManhattanNeRFModel(Model):
+class ManhattanINGPModel(Model):
     """Manhattan NeRF model - Instant NGP backbone + normal estimation and losses"""
-    config: ManhattanNeRFModelConfig
+    config: ManhattanINGPModelConfig
     field: TCNNInstantNGPField
 
-    def __init__(self, config: ManhattanNeRFModelConfig, **kwargs) -> None:
+    def __init__(self, config: ManhattanINGPModelConfig, **kwargs) -> None:
         super().__init__(config=config, **kwargs)
 
     def populate_modules(self):
@@ -210,7 +210,7 @@ class ManhattanNeRFModel(Model):
         param_groups["fields"] = list(self.field.parameters())
         return param_groups
 
-    def get_outputs(self, ray_bundle: RayBundle):
+    def get_outputs(self, ray_bundle: RayBundle, **kwargs):
         assert self.field is not None
         num_rays = len(ray_bundle)
 
@@ -246,7 +246,7 @@ class ManhattanNeRFModel(Model):
         accumulation = self.renderer_accumulation(weights=weights, ray_indices=ray_indices, num_rays=num_rays)
         alive_ray_mask = accumulation.squeeze(-1) > 0
 
-        if self.estimate_normals:
+        if self.estimate_normals and not kwargs.get("continuous_pixels"):
             normals, normal_valid_mask = hypersim_normals_from_ray_depths(ray_bundle, depth)
             outputs = {
                 "rgb": rgb,
@@ -275,7 +275,7 @@ class ManhattanNeRFModel(Model):
         if self.config.calc_depth_metrics:
             metrics_dict["rmse_depth"] = self.rmse_depth(outputs["depth"], batch["depth"].to(self.device))
             metrics_dict["abs_depth"] = self.abs_depth(outputs["depth"], batch["depth"].to(self.device))
-        if self.calc_normal_metrics:
+        if self.calc_normal_metrics and "normals" in outputs:
             metrics_dict["angular_normal"] = self.angular_normal(outputs["normals"], batch["normals"].to(self.device))
 
         metrics_dict["num_samples_per_batch"] = outputs["num_samples_per_ray"].sum()
@@ -290,9 +290,8 @@ class ManhattanNeRFModel(Model):
         if self.config.opacity_penalty_weight > 0:
             loss_dict["opacity"] = self.config.opacity_penalty_weight * \
                                         self.opacity_loss(outputs["accumulation"][mask])
-        if self.estimate_normals:
-            loss_dict.update(self.manhattan_normal_loss(outputs["normals"][mask],
-                             outputs["normal_valid_mask"][mask], step))
+        if self.estimate_normals and "normals" in outputs:
+            loss_dict.update(self.manhattan_normal_loss(outputs["normals"][outputs["normal_valid_mask"]], step))
         return loss_dict
 
     def get_image_metrics_and_images(
@@ -327,7 +326,7 @@ class ManhattanNeRFModel(Model):
             pred_depth = outputs["depth"]
             metrics_dict.update({"rmse_depth" : self.rmse_depth(tgt_depth, pred_depth),
                                  "abs_depth" : self.abs_depth(tgt_depth, pred_depth)})
-        if self.calc_normal_metrics:
+        if self.calc_normal_metrics and "normals" in outputs:
             metrics_dict.update({"angular_normal" : self.angular_normal(
                         batch["normals"].to(self.device), outputs["normals"])})
 

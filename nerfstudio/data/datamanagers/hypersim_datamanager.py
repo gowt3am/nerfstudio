@@ -66,8 +66,8 @@ class HyperSimDataManager(VanillaDataManager):  # pylint: disable=abstract-metho
         self, dataset: InputDataset, *args: Any, **kwargs: Any) -> PixelSampler:
         """Infer which pixel sampler to use."""
         if self.config.ray_sampling_strategy == "triangle":
-            return TrianglePixelSampler(*args, **kwargs, height = self.H,
-                    width = self.W, dilation_rate = self.config.dilation_rate)
+            return TrianglePixelSampler(*args, **kwargs, height = dataset.H,
+                    width = dataset.W, dilation_rate = self.config.dilation_rate)
         elif self.config.ray_sampling_strategy == "uniform":
             return PixelSampler(*args, **kwargs)
         else:

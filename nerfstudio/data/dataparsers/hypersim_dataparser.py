@@ -112,6 +112,7 @@ class HyperSim(DataParser):
         scene_meta = pd.read_csv(self.config.data / '_detail' / 'metadata_scene.csv')
         tmp_idx = (scene_meta['parameter_name'] == 'meters_per_asset_unit')
         self.config.m_per_asset_unit = scene_meta.loc[tmp_idx, 'parameter_value'].iloc[0]
+        print(f'Using m_per_asset_unit={self.config.m_per_asset_unit}')
 
     def _load_scene_metadata(self):
         """Load scene statistics - List of images for each camera trajectory"""

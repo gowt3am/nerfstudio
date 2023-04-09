@@ -50,6 +50,8 @@ class HyperSimDataset(InputDataset):
         self.m_per_asset_unit = self.metadata["m_per_asset_unit"]
         self.H_orig = self.metadata["H_orig"]
         self.W_orig = self.metadata["W_orig"]
+        self.H = int(self.H_orig * scale_factor)
+        self.W = int(self.W_orig * scale_factor)
         self.xyz_min = self.metadata["xyz_min"]
         self.xyz_max = self.metadata["xyz_max"]
         self.scene_boundary = self.metadata["scene_boundary"]
@@ -70,11 +72,11 @@ class HyperSimDataset(InputDataset):
         render_entity_id = h5py.File(render_entity_id_filename, 'r')['dataset'][:].astype('int32')
         image = self._tonemapping(hdr_image, render_entity_id)
 
-        # rescaled shape should be (h, w, 3), and then normalized to [0, 1]
+        # rescaled shape should be (h, w, 3), dtype is float32, range is [0, 1]
         image = self._downscale_content(torch.from_numpy(image.astype('float32')), "color")
         assert len(image.shape) == 3
         assert image.shape[2] == 3, f"Image shape of {image.shape} is incorrect."
-        return image / 255.0
+        return image
 
     def _tonemapping(self, hdr_image: np.ndarray, render_entity_id: np.ndarray) -> np.ndarray:
         """From https://github.com/apple/ml-hypersim/blob/main/code/python/tools/scene_generate_images_tonemap.py

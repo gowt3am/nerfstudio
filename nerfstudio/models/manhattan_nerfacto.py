@@ -24,7 +24,11 @@ from typing import Dict, List, Tuple, Type
 import numpy as np
 import torch
 from torch.nn import Parameter
-from torchmetrics import PeakSignalNoiseRatio
+from torchmetrics import (
+    PeakSignalNoiseRatio,
+    MeanSquaredError,
+    MeanAbsoluteError,
+)
 from torchmetrics.functional import structural_similarity_index_measure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from typing_extensions import Literal
@@ -40,7 +44,10 @@ from nerfstudio.field_components.spatial_distortions import SceneContraction
 from nerfstudio.fields.density_fields import HashMLPDensityField
 from nerfstudio.fields.nerfacto_field import TCNNNerfactoField
 from nerfstudio.model_components.losses import (
-    MSELoss,
+    MSELossFiltered,
+    OpacityLoss,
+    ManhattanNormalLoss,
+    angular_error_normals_degree,
     distortion_loss,
     interlevel_loss,
     orientation_loss,
@@ -60,13 +67,14 @@ from nerfstudio.model_components.scene_colliders import NearFarCollider
 from nerfstudio.model_components.shaders import NormalsShader
 from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils import colormaps
+from nerfstudio.data.utils.data_utils import hypersim_normals_from_ray_depths
 
 
 @dataclass
-class NerfactoModelConfig(ModelConfig):
+class ManhattanNerfactoModelConfig(ModelConfig):
     """Nerfacto Model Config"""
 
-    _target: Type = field(default_factory=lambda: NerfactoModel)
+    _target: Type = field(default_factory=lambda: ManhattanNerfactoModel)
     near_plane: float = 0.05
     """How far along the ray to start sampling."""
     far_plane: float = 1000.0
@@ -129,15 +137,37 @@ class NerfactoModelConfig(ModelConfig):
     disable_scene_contraction: bool = False
     """Whether to disable scene contraction or not."""
 
+    opacity_penalty_weight: float = 1e-3
+    """Weight for opacity penalty loss."""
+    min_cluster_similarity: float = 0.9
+    """Minimum dot product between cluster and normal to be considered similar."""
+    manhattan_orthogonal_dot_weight: float = 2e-3
+    """Weight for manhattan normals to be orthogonal to each other - dot product."""
+    normal_manhattan_cluster_dot_weight: float = 2e-3
+    """Weight for normals to be close to manhattan cluster - dot product."""
+    normal_manhattan_cluster_l1_weight: float = 2e-3
+    """Weight for normals to be close to manhattan cluster - L1 loss."""
+    manhattan_loss_start_step: int = 500
+    """Step at which to start the manhattan losses."""
+    manhattan_loss_grow_till_step: int = 2500
+    """Step at which to stop growing the manhattan loss and it becomes specified value."""
+    manhattan_loss_stop_step: int = -1
+    """Step at which to stop using manhattan loss. -1 will never stop."""
 
-class NerfactoModel(Model):
+    calc_depth_metrics: bool = False
+    """Whether to calculate depth metrics."""
+    calc_normal_metrics: bool = False
+    """Whether to calculate normal metrics."""
+
+
+class ManhattanNerfactoModel(Model):
     """Nerfacto model
 
     Args:
         config: Nerfacto configuration to instantiate model
     """
 
-    config: NerfactoModelConfig
+    config: ManhattanNerfactoModelConfig
 
     def populate_modules(self):
         """Set the fields and modules."""
@@ -213,17 +243,34 @@ class NerfactoModel(Model):
         self.renderer_accumulation = AccumulationRenderer()
         self.renderer_depth = DepthRenderer()
         self.renderer_normals = NormalsRenderer()
+        self.estimate_normals = (self.config.normal_manhattan_cluster_dot_weight > 0 or
+                                self.config.normal_manhattan_cluster_l1_weight > 0 or
+                                self.config.manhattan_orthogonal_dot_weight > 0)
+        self.calc_normal_metrics = self.config.calc_normal_metrics and self.estimate_normals
 
         # shaders
         self.normals_shader = NormalsShader()
 
         # losses
-        self.rgb_loss = MSELoss()
+        self.rgb_loss = MSELossFiltered()
+        self.opacity_loss = OpacityLoss()
+        self.manhattan_normal_loss = ManhattanNormalLoss(
+            min_cluster_similarity=self.config.min_cluster_similarity,
+            manhattan_orthogonal_dot_weight=self.config.manhattan_orthogonal_dot_weight,
+            normal_manhattan_dot_weight=self.config.normal_manhattan_cluster_dot_weight,
+            normal_manhattan_l1_weight=self.config.normal_manhattan_cluster_l1_weight,
+            start_step=self.config.manhattan_loss_start_step,
+            grow_till_step=self.config.manhattan_loss_grow_till_step,
+            end_step=self.config.manhattan_loss_stop_step
+        )
 
         # metrics
-        self.psnr = PeakSignalNoiseRatio(data_range=1.0)
-        self.ssim = structural_similarity_index_measure
-        self.lpips = LearnedPerceptualImagePatchSimilarity(normalize=True)
+        self.psnr_rgb = PeakSignalNoiseRatio(data_range=1.0)
+        self.ssim_rgb = structural_similarity_index_measure
+        self.lpips_rgb = LearnedPerceptualImagePatchSimilarity(normalize=True)
+        self.rmse_depth = MeanSquaredError(squared=False)
+        self.abs_depth = MeanAbsoluteError()
+        self.angular_normal = angular_error_normals_degree
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
         param_groups = {}
@@ -273,11 +320,21 @@ class NerfactoModel(Model):
         depth = self.renderer_depth(weights=weights, ray_samples=ray_samples)
         accumulation = self.renderer_accumulation(weights=weights)
 
-        outputs = {
-            "rgb": rgb,
-            "accumulation": accumulation,
-            "depth": depth,
-        }
+        if self.estimate_normals and not kwargs.get("continuous_pixels"):
+            normals, normal_valid_mask = hypersim_normals_from_ray_depths(ray_bundle, depth)
+            outputs = {
+                "rgb": rgb,
+                "accumulation": accumulation,
+                "depth": depth,
+                "normals": normals,
+                "normal_valid_mask": normal_valid_mask,
+            }
+        else:
+            outputs = {
+                "rgb": rgb,
+                "accumulation": accumulation,
+                "depth": depth,
+            }
 
         if self.config.predict_normals:
             normals = self.renderer_normals(normals=field_outputs[FieldHeadNames.NORMALS], weights=weights)
@@ -308,15 +365,28 @@ class NerfactoModel(Model):
     def get_metrics_dict(self, outputs, batch):
         metrics_dict = {}
         image = batch["image"].to(self.device)
-        metrics_dict["psnr"] = self.psnr(outputs["rgb"], image)
+        metrics_dict["psnr"] = self.psnr_rgb(outputs["rgb"], image)
+
+        if self.config.calc_depth_metrics:
+            metrics_dict["rmse_depth"] = self.rmse_depth(outputs["depth"], batch["depth"].to(self.device))
+            metrics_dict["abs_depth"] = self.abs_depth(outputs["depth"], batch["depth"].to(self.device))
+        if self.calc_normal_metrics and "normals" in outputs:
+            metrics_dict["angular_normal"] = self.angular_normal(outputs["normals"], batch["normals"].to(self.device))
+
         if self.training:
             metrics_dict["distortion"] = distortion_loss(outputs["weights_list"], outputs["ray_samples_list"])
         return metrics_dict
 
     def get_loss_dict(self, outputs, batch, step, metrics_dict=None):
         loss_dict = {}
-        image = batch["image"].to(self.device)
-        loss_dict["rgb_loss"] = self.rgb_loss(image, outputs["rgb"])
+        loss_dict["rgb"] = self.rgb_loss(batch["image"].to(self.device),
+                                         outputs["rgb"])
+        if self.config.opacity_penalty_weight > 0:
+            loss_dict["opacity"] = self.config.opacity_penalty_weight * \
+                                        self.opacity_loss(outputs["accumulation"])
+        if self.estimate_normals and "normals" in outputs:
+            loss_dict.update(self.manhattan_normal_loss(outputs["normals"][outputs["normal_valid_mask"]], step))
+        
         if self.training:
             loss_dict["interlevel_loss"] = self.config.interlevel_loss_mult * interlevel_loss(
                 outputs["weights_list"], outputs["ray_samples_list"]
@@ -354,16 +424,23 @@ class NerfactoModel(Model):
         image = torch.moveaxis(image, -1, 0)[None, ...]
         rgb = torch.moveaxis(rgb, -1, 0)[None, ...]
 
-        psnr = self.psnr(image, rgb)
-        ssim = self.ssim(image, rgb)
-        lpips = self.lpips(image, rgb)
+        psnr = self.psnr_rgb(image, rgb)
+        ssim = self.ssim_rgb(image, rgb)
+        lpips = self.lpips_rgb(image, rgb)
 
         # all of these metrics will be logged as scalars
-        metrics_dict = {"psnr": float(psnr.item()), "ssim": float(ssim)}  # type: ignore
-        metrics_dict["lpips"] = float(lpips)
+        metrics_dict = {"psnr": float(psnr), "ssim": float(ssim), "lpips": float(lpips)}
+
+        if self.config.calc_depth_metrics:
+            tgt_depth = batch["depth"].to(self.device)
+            pred_depth = outputs["depth"]
+            metrics_dict.update({"rmse_depth" : self.rmse_depth(tgt_depth, pred_depth),
+                                 "abs_depth" : self.abs_depth(tgt_depth, pred_depth)})
+        if self.calc_normal_metrics and "normals" in outputs:
+            metrics_dict.update({"angular_normal" : self.angular_normal(
+                        batch["normals"].to(self.device), outputs["normals"])})
 
         images_dict = {"img": combined_rgb, "accumulation": combined_acc, "depth": combined_depth}
-
         for i in range(self.config.num_proposal_iterations):
             key = f"prop_depth_{i}"
             prop_depth_i = colormaps.apply_depth_colormap(
@@ -371,5 +448,4 @@ class NerfactoModel(Model):
                 accumulation=outputs["accumulation"],
             )
             images_dict[key] = prop_depth_i
-
         return metrics_dict, images_dict

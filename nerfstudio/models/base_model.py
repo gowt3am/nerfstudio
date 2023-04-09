@@ -126,7 +126,7 @@ class Model(nn.Module):
             Outputs of model. (ie. rendered colors)
         """
 
-    def forward(self, ray_bundle: RayBundle) -> Dict[str, torch.Tensor]:
+    def forward(self, ray_bundle: RayBundle, **kwargs) -> Dict[str, torch.Tensor]:
         """Run forward starting with a ray bundle. This outputs different things depending on the configuration
         of the model and whether or not the batch is provided (whether or not we are training basically)
 
@@ -137,7 +137,7 @@ class Model(nn.Module):
         if self.collider is not None:
             ray_bundle = self.collider(ray_bundle)
 
-        return self.get_outputs(ray_bundle)
+        return self.get_outputs(ray_bundle, **kwargs)
 
     def get_metrics_dict(self, outputs, batch) -> Dict[str, torch.Tensor]:
         """Compute and returns metrics.
@@ -175,7 +175,7 @@ class Model(nn.Module):
             start_idx = i
             end_idx = i + num_rays_per_chunk
             ray_bundle = camera_ray_bundle.get_row_major_sliced_ray_bundle(start_idx, end_idx)
-            outputs = self.forward(ray_bundle=ray_bundle)
+            outputs = self.forward(ray_bundle=ray_bundle, continuous_pixels=True)
             for output_name, output in outputs.items():  # type: ignore
                 outputs_lists[output_name].append(output)
         outputs = {}

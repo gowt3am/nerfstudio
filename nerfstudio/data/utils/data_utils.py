@@ -167,10 +167,10 @@ def hypersim_normals_from_ray_depths(ray_bundle: RayBundle, ray_depth: TensorTyp
         _P3_|_P1_|____
             |    |     
     """
-    # Get the corresponding points in world coordinates    
-    P_world = ray_bundle.origins + ray_bundle.directions * ray_depth.unsqueeze(-1)
+    # Get the corresponding points in world coordinates
+    P_world = ray_bundle.origins + ray_bundle.directions * ray_depth
     N, _ = P_world.shape
-    assert N % 3 == 0
+    assert N % 3 == 0, f"Number of points {N} is not divisible by 3"
     N = N // 3
     P1_world = P_world[:N]
     P2_world = P_world[N:2*N]
@@ -183,12 +183,11 @@ def hypersim_normals_from_ray_depths(ray_bundle: RayBundle, ray_depth: TensorTyp
 
     # TODO: Processing invalid depth and normals
     invalid_depth = (ray_depth == 0.0) + torch.isnan(ray_depth) + torch.isinf(ray_depth)
-    P1_invalid = invalid_depth[:N]
-    P2_invalid = invalid_depth[N:2*N]
-    P3_invalid = invalid_depth[2*N: 3*N]
-    norm_invalid = torch.abs(normals).sum(-1) == 0.0 + \
-                   torch.isnan(normals).sum(-1) > 0 + \
-                   torch.isinf(normals).sum(-1) > 0
+    P1_invalid = invalid_depth[:N, 0]
+    P2_invalid = invalid_depth[N:2*N, 0]
+    P3_invalid = invalid_depth[2*N: 3*N, 0]  
+
+    norm_invalid = (torch.abs(normals).sum(-1) == 0.0) + torch.isnan(normals).sum(-1) + torch.isinf(normals).sum(-1)
     invalid_normals = P1_invalid + P2_invalid + P3_invalid + norm_invalid
     normals[invalid_normals] = torch.zeros(3, device=ray_depth.device)
 
@@ -226,8 +225,10 @@ def _cluster_normals(normals: TensorType, device: torch.device,
         merge_clusters: bool = True, find_opposites = True):
     """Clusters normals using K-means, and merges clusters that are similar"""
     # K-means clustering using faiss library
+    # Default min, max per centroids are 39, 256, changed to suppress warnings
     kmeans = faiss.Kmeans(d = 3, k = num_clusters, niter = num_iterations,
-                          gpu = False, spherical = True, verbose = False)
+                          gpu = False, spherical = True, verbose = False,
+                          min_points_per_centroid = 3, max_points_per_centroid = 256)
     kmeans.train(normals)
     
     # Extract cluster membership for each normal
@@ -244,7 +245,7 @@ def _cluster_normals(normals: TensorType, device: torch.device,
     c1_idx = cluster_sizes_sorted_idx[0].item()
 
     # Extracting similarities between clusters
-    similarities = (normal_clusters @ normal_clusters.T)
+    similarities = torch.matmul(cluster_centers, cluster_centers.T)
     similarities_absolute = torch.abs(similarities)
 
     # Most orthogonal set (C1, C2, C3)    
