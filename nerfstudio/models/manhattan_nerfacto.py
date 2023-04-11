@@ -137,9 +137,11 @@ class ManhattanNerfactoModelConfig(ModelConfig):
     disable_scene_contraction: bool = False
     """Whether to disable scene contraction or not."""
 
+    appearance_embedding_dim: int = 32
+    """Dimension of the appearance embedding. Set to 0 to disable appearance embedding"""
     opacity_penalty_weight: float = 1e-3
     """Weight for opacity penalty loss."""
-    min_cluster_similarity: float = 0.9
+    min_cluster_similarity: float = 0.99
     """Minimum dot product between cluster and normal to be considered similar."""
     manhattan_orthogonal_dot_weight: float = 2e-3
     """Weight for manhattan normals to be orthogonal to each other - dot product."""
@@ -191,6 +193,7 @@ class ManhattanNerfactoModel(Model):
             num_images=self.num_train_data,
             use_pred_normals=self.config.predict_normals,
             use_average_appearance_embedding=self.config.use_average_appearance_embedding,
+            appearance_embedding_dim=self.config.appearance_embedding_dim
         )
 
         self.density_fns = []
@@ -368,8 +371,8 @@ class ManhattanNerfactoModel(Model):
         metrics_dict["psnr"] = self.psnr_rgb(outputs["rgb"], image)
 
         if self.config.calc_depth_metrics:
-            metrics_dict["rmse_depth"] = self.rmse_depth(outputs["depth"], batch["depth"].to(self.device))
-            metrics_dict["abs_depth"] = self.abs_depth(outputs["depth"], batch["depth"].to(self.device))
+            metrics_dict["rmse_depth"] = self.rmse_depth(outputs["depth"].squeeze(), batch["depth"].to(self.device))
+            metrics_dict["abs_depth"] = self.abs_depth(outputs["depth"].squeeze(), batch["depth"].to(self.device))
         if self.calc_normal_metrics and "normals" in outputs:
             metrics_dict["angular_normal"] = self.angular_normal(outputs["normals"], batch["normals"].to(self.device))
 
@@ -433,7 +436,7 @@ class ManhattanNerfactoModel(Model):
 
         if self.config.calc_depth_metrics:
             tgt_depth = batch["depth"].to(self.device)
-            pred_depth = outputs["depth"]
+            pred_depth = outputs["depth"].squeeze()
             metrics_dict.update({"rmse_depth" : self.rmse_depth(tgt_depth, pred_depth),
                                  "abs_depth" : self.abs_depth(tgt_depth, pred_depth)})
         if self.calc_normal_metrics and "normals" in outputs:

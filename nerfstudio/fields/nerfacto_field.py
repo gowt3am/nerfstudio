@@ -117,7 +117,9 @@ class TCNNNerfactoField(Field):
         self.spatial_distortion = spatial_distortion
         self.num_images = num_images
         self.appearance_embedding_dim = appearance_embedding_dim
-        self.embedding_appearance = Embedding(self.num_images, self.appearance_embedding_dim)
+        self.use_appearance_embedding = self.appearance_embedding_dim > 0
+        if self.use_appearance_embedding:
+            self.embedding_appearance = Embedding(self.num_images, self.appearance_embedding_dim)
         self.use_average_appearance_embedding = use_average_appearance_embedding
         self.use_transient_embedding = use_transient_embedding
         self.use_semantics = use_semantics
@@ -265,17 +267,18 @@ class TCNNNerfactoField(Field):
         outputs_shape = ray_samples.frustums.directions.shape[:-1]
 
         # appearance
-        if self.training:
-            embedded_appearance = self.embedding_appearance(camera_indices)
-        else:
-            if self.use_average_appearance_embedding:
-                embedded_appearance = torch.ones(
-                    (*directions.shape[:-1], self.appearance_embedding_dim), device=directions.device
-                ) * self.embedding_appearance.mean(dim=0)
+        if self.use_appearance_embedding:
+            if self.training:
+                embedded_appearance = self.embedding_appearance(camera_indices)
             else:
-                embedded_appearance = torch.zeros(
-                    (*directions.shape[:-1], self.appearance_embedding_dim), device=directions.device
-                )
+                if self.use_average_appearance_embedding:
+                    embedded_appearance = torch.ones(
+                        (*directions.shape[:-1], self.appearance_embedding_dim), device=directions.device
+                    ) * self.embedding_appearance.mean(dim=0)
+                else:
+                    embedded_appearance = torch.zeros(
+                        (*directions.shape[:-1], self.appearance_embedding_dim), device=directions.device
+                    )
 
         # transients
         if self.use_transient_embedding and self.training:
@@ -311,14 +314,10 @@ class TCNNNerfactoField(Field):
             x = self.mlp_pred_normals(pred_normals_inp).view(*outputs_shape, -1).to(directions)
             outputs[FieldHeadNames.PRED_NORMALS] = self.field_head_pred_normals(x)
 
-        h = torch.cat(
-            [
-                d,
-                density_embedding.view(-1, self.geo_feat_dim),
-                embedded_appearance.view(-1, self.appearance_embedding_dim),
-            ],
-            dim=-1,
-        )
+        h = torch.cat([d, density_embedding.view(-1, self.geo_feat_dim)], dim=-1)
+        if self.use_appearance_embedding:
+            h = torch.cat([h, embedded_appearance.view(-1, self.appearance_embedding_dim)], dim=-1)
+
         rgb = self.mlp_head(h).view(*outputs_shape, -1).to(directions)
         outputs.update({FieldHeadNames.RGB: rgb})
 
@@ -350,7 +349,9 @@ class TorchNerfactoField(Field):
         self.spatial_distortion = spatial_distortion
         self.num_images = num_images
         self.appearance_embedding_dim = appearance_embedding_dim
-        self.embedding_appearance = Embedding(self.num_images, self.appearance_embedding_dim)
+        self.use_appearance_embedding = self.appearance_embedding_dim > 0
+        if self.use_appearance_embedding:
+            self.embedding_appearance = Embedding(self.num_images, self.appearance_embedding_dim)
 
         self.position_encoding = position_encoding
         self.direction_encoding = direction_encoding
@@ -394,27 +395,22 @@ class TorchNerfactoField(Field):
         if ray_samples.camera_indices is None:
             raise AttributeError("Camera indices are not provided.")
         camera_indices = ray_samples.camera_indices.squeeze()
-        if self.training:
-            embedded_appearance = self.embedding_appearance(camera_indices)
-        else:
-            embedded_appearance = torch.zeros(
-                (*outputs_shape, self.appearance_embedding_dim),
-                device=ray_samples.frustums.directions.device,
-            )
+        if self.use_appearance_embedding:
+            if self.training:
+                embedded_appearance = self.embedding_appearance(camera_indices)
+            else:
+                embedded_appearance = torch.zeros(
+                    (*outputs_shape, self.appearance_embedding_dim),
+                    device=ray_samples.frustums.directions.device,
+                )
 
         outputs = {}
         for field_head in self.field_heads:
             encoded_dir = self.direction_encoding(ray_samples.frustums.directions)
-            mlp_out = self.mlp_head(
-                torch.cat(
-                    [
-                        encoded_dir,
-                        density_embedding,  # type:ignore
-                        embedded_appearance.view(-1, self.appearance_embedding_dim),
-                    ],
-                    dim=-1,  # type:ignore
-                )
-            )
+            h = torch.cat([encoded_dir, density_embedding], dim=-1)
+            if self.use_appearance_embedding:
+                h = torch.cat([h, embedded_appearance.view(-1, self.appearance_embedding_dim)], dim=-1)
+            mlp_out = self.mlp_head(h)
             outputs[field_head.field_head_name] = field_head(mlp_out)
         return outputs
 

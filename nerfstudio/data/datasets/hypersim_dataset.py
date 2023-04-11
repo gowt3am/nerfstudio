@@ -192,9 +192,11 @@ class HyperSimDataset(InputDataset):
                     content[content == 20] = 2
                     wall_floor_mask = (content == 1) + (content == 2)
                     content[np.logical_not(wall_floor_mask)] = 3
+            else:
+                raise NotImplementedError(f"Label {label} is not implemented")
             
             assert content is not None, f"Content for label {label} is unavailable"
-            metadata[label] = self._downscale_content(torch.from_numpy(content), label)
+            metadata[label] = self._downscale_content(torch.from_numpy(content), label) if label != "depth" else self._downscale_content(content, label)
         return metadata
     
     def _process_and_clip_depth(self):
@@ -221,5 +223,7 @@ class HyperSimDataset(InputDataset):
             self.all_depths = hypersim_clip_depths_to_bbox(depths=all_depths, 
                 P_world=self.P_world, poses=self._dataparser_outputs.cameras.camera_to_worlds,
                 xyz_min=self.xyz_min, xyz_max=self.xyz_max)
+        else:
+            self.all_depths = all_depths
         # Scale depth with respect to scene scaling factor (calculated in dataparser)
-        self.all_depths *= self.scale_factor
+        self.all_depths *= self._dataparser_outputs.dataparser_scale
