@@ -63,7 +63,7 @@ from nerfstudio.model_components.renderers import (
     NormalsRenderer,
     RGBRenderer,
 )
-from nerfstudio.model_components.scene_colliders import NearFarCollider
+from nerfstudio.model_components.scene_colliders import NearFarCollider, AABBBoxCollider
 from nerfstudio.model_components.shaders import NormalsShader
 from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils import colormaps
@@ -72,10 +72,10 @@ from nerfstudio.data.utils.data_utils import hypersim_normals_from_ray_depths
 
 @dataclass
 class ManhattanNerfactoModelConfig(ModelConfig):
-    """Nerfacto Model Config"""
+    """Manhattan Nerfacto Model Config"""
 
     _target: Type = field(default_factory=lambda: ManhattanNerfactoModel)
-    near_plane: float = 0.05
+    near_plane: float = 0.0
     """How far along the ray to start sampling."""
     far_plane: float = 1000.0
     """How far along the ray to stop sampling."""
@@ -136,9 +136,9 @@ class ManhattanNerfactoModelConfig(ModelConfig):
     """Whether to predict normals or not."""
     disable_scene_contraction: bool = False
     """Whether to disable scene contraction or not."""
-
-    appearance_embedding_dim: int = 32
-    """Dimension of the appearance embedding. Set to 0 to disable appearance embedding"""
+    use_appearance_embedding: bool = True
+    """Whether to use appearance embedding."""
+    
     opacity_penalty_weight: float = 1e-3
     """Weight for opacity penalty loss."""
     min_cluster_similarity: float = 0.99
@@ -163,7 +163,9 @@ class ManhattanNerfactoModelConfig(ModelConfig):
 
 
 class ManhattanNerfactoModel(Model):
-    """Nerfacto model
+    """Manhattan Nerfacto model
+    In addition to Manhattan Priors, contains some differences from base Nerfacto model
+        1. Still uses Appearance Embedding - Should actually give lower eval. PSNR, but didn't gives better!
 
     Args:
         config: Nerfacto configuration to instantiate model
@@ -193,7 +195,7 @@ class ManhattanNerfactoModel(Model):
             num_images=self.num_train_data,
             use_pred_normals=self.config.predict_normals,
             use_average_appearance_embedding=self.config.use_average_appearance_embedding,
-            appearance_embedding_dim=self.config.appearance_embedding_dim
+            appearance_embedding_dim=32 if self.config.use_appearance_embedding else 0
         )
 
         self.density_fns = []

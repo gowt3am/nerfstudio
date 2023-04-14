@@ -68,6 +68,7 @@ from nerfstudio.plugins.registry import discover_methods
 
 method_configs: Dict[str, TrainerConfig] = {}
 descriptions = {
+    "manhattan-nerfacto-big": "Larger version of Manhattan-Nerfacto. (slow and long)",
     "manhattan-nerfacto": "Same as Manhattan-INGP but with Nerfacto backbone (currently only works with hypersim)",
     "manhattan-ingp": "ManhattanNeRF with Instant-NGP backbone, normal estimation, clustering and manhattan losses (currently only works with hypersim)",
     "nerfacto": "Recommended real-time model tuned for real captures. This model will be continually updated.",
@@ -99,19 +100,8 @@ method_configs["manhattan-nerfacto"] = TrainerConfig(
             dataparser=HyperSimDataParserConfig(),
             train_num_rays_per_batch=4095,
             eval_num_rays_per_batch=4095,
-            camera_optimizer=CameraOptimizerConfig(
-                mode="SO3xR3",
-                optimizer=AdamOptimizerConfig(lr=6e-4, eps=1e-8, weight_decay=1e-2),
-                scheduler=ExponentialDecaySchedulerConfig(lr_final=6e-6, max_steps=200000),
-            ),
-            labels=["normals", "depth"],
-            ray_sampling_strategy="triangle"
         ),
         model=ManhattanNerfactoModelConfig(eval_num_rays_per_chunk=1 << 15,
-                                           near_plane = 0.005,
-                                           appearance_embedding_dim = 32,
-                                           calc_normal_metrics = True,
-                                           calc_depth_metrics = True,
                                            opacity_penalty_weight = -1.0,
                                            manhattan_orthogonal_dot_weight = 2e-3,
                                            normal_manhattan_cluster_dot_weight = 2e-3,
@@ -130,6 +120,49 @@ method_configs["manhattan-nerfacto"] = TrainerConfig(
     viewer=ViewerConfig(num_rays_per_chunk=1 << 15),
     vis="viewer",
 )
+method_configs["manhattan-nerfacto-big"] = TrainerConfig(
+    method_name="manhattan-nerfacto",
+    steps_per_eval_batch=1000,
+    steps_per_eval_image=99990,
+    steps_per_save=2000,
+    steps_per_eval_all_images=99990,
+    max_num_iterations=100000,
+    mixed_precision=True,
+    pipeline=VanillaPipelineConfig(
+        datamanager=HyperSimDataManagerConfig(
+            dataparser=HyperSimDataParserConfig(),
+            train_num_rays_per_batch=4095,
+            eval_num_rays_per_batch=4095,
+        ),
+        model=ManhattanNerfactoModelConfig(
+            opacity_penalty_weight = -1.0,
+            manhattan_orthogonal_dot_weight = 2e-3,
+            normal_manhattan_cluster_dot_weight = 2e-3,
+            normal_manhattan_cluster_l1_weight = 2e-3,
+            eval_num_rays_per_chunk=1 << 15,
+            num_nerf_samples_per_ray=128,
+            num_proposal_samples_per_ray=(512, 256),
+            hidden_dim=128,
+            hidden_dim_color=128,
+            hidden_dim_transient=128,
+            max_res=3000,
+            proposal_weights_anneal_max_num_iters=5000,
+            log2_hashmap_size=21,
+        ),
+    ),
+    optimizers={
+        "proposal_networks": {
+            "optimizer": RAdamOptimizerConfig(lr=1e-2, eps=1e-15),
+            "scheduler": None,
+        },
+        "fields": {
+            "optimizer": RAdamOptimizerConfig(lr=1e-2, eps=1e-15),
+            "scheduler": ExponentialDecaySchedulerConfig(lr_final=1e-4, max_steps=100000),
+        },
+    },
+    viewer=ViewerConfig(num_rays_per_chunk=1 << 15),
+    vis="viewer",
+)
 
 method_configs["manhattan-ingp"] = TrainerConfig(
     method_name="manhattan-ingp",
@@ -141,9 +174,7 @@ method_configs["manhattan-ingp"] = TrainerConfig(
     mixed_precision=True,
     pipeline=DynamicBatchPipelineConfig(
         datamanager=HyperSimDataManagerConfig(dataparser=HyperSimDataParserConfig(),
-                                              train_num_rays_per_batch=8190,
-                                              labels=["normals", "depth"],
-                                              ray_sampling_strategy="triangle"),
+                                              train_num_rays_per_batch=8190),
         model=ManhattanINGPModelConfig(near_plane = 0.005,
                                        eval_num_rays_per_chunk = 4095,
                                        calc_normal_metrics = True,
