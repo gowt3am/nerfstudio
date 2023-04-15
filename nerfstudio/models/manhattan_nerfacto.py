@@ -156,9 +156,9 @@ class ManhattanNerfactoModelConfig(ModelConfig):
     manhattan_loss_stop_step: int = -1
     """Step at which to stop using manhattan loss. -1 will never stop."""
 
-    calc_depth_metrics: bool = False
+    calc_depth_metrics: bool = True
     """Whether to calculate depth metrics."""
-    calc_normal_metrics: bool = False
+    calc_normal_metrics: bool = True
     """Whether to calculate normal metrics."""
 
 

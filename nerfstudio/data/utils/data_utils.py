@@ -122,7 +122,7 @@ def hypersim_generate_camera_rays(size: Tuple, M_cam_from_uv: TensorType = None)
     return ray_centers_cam, ray_centers_uv, ray_idxs
 
 def hypersim_generate_pointcloud(ray_centers_cam: TensorType,
-                                 poses: TensorType["num_cameras":..., 3, 4],
+                                 cam_to_world: TensorType["num_cameras":..., 3, 4],
                                  depths: TensorType) -> TensorType:
     """Generates a pointcloud from depth values for the Hypersim dataset"""
     depth = rearrange(depths.clone(), 'b h w -> b (h w)') 
@@ -131,8 +131,13 @@ def hypersim_generate_pointcloud(ray_centers_cam: TensorType,
     else:
         assert depth.dim() == 3
     # Normalize such that ||ray_dir||=1
-    ray_centers_cam = F.normalize(ray_centers_cam, p = 2, dim = -1)
+    ray_centers_cam = F.normalize(ray_centers_cam.unsqueeze(0), p = 2, dim = -1)
     
+    # Converting 3x4 poses into 4x4 poses
+    last_row = torch.tensor([0, 0, 0, 1], dtype = cam_to_world.dtype,
+                            device = cam_to_world.device).view(1, 1, 4).repeat(cam_to_world.shape[0], 1, 1)
+    poses = torch.cat((cam_to_world, last_row), dim = 1)
+
     P_cam = ray_centers_cam * depth
     P_cam = torch.cat((P_cam, torch.ones_like(depth)), dim = -1)
     P_world = poses @ torch.transpose(P_cam, 1, 2)
@@ -142,6 +147,7 @@ def hypersim_generate_pointcloud(ray_centers_cam: TensorType,
 def hypersim_clip_depths_to_bbox(depths: TensorType, P_world: TensorType,
                                  poses: TensorType["num_cameras":..., 3, 4],
                                  xyz_min: TensorType, xyz_max: TensorType) -> TensorType:
+    h = depths.shape[1]
     depth = rearrange(depths.clone(), 'b h w -> b (h w)')
     assert depth.dim() == 2
     xyz_min = xyz_min.unsqueeze(0).unsqueeze(0)
@@ -154,7 +160,7 @@ def hypersim_clip_depths_to_bbox(depths: TensorType, P_world: TensorType,
     S = torch.where((depth.unsqueeze(-1) == 0.0), torch.ones_like(S), S)
     S = torch.min(S, dim=-1, keepdim=True)[0]
     S = S[...,0]
-    return rearrange(depth * S, 'b (h w) -> b h w')
+    return rearrange(depth * S, 'b (h w) -> b h w', h=h)
 
 
 @torch.cuda.amp.autocast(dtype=torch.float32)

@@ -17,6 +17,7 @@ HyperSim dataset.
 """
 
 import h5py
+import warnings
 from typing import Dict
 
 import numpy as np
@@ -215,14 +216,15 @@ class HyperSimDataset(InputDataset):
         all_depths /= self.m_per_asset_unit 
         if (self.xyz_min != self.scene_boundary['xyz_scene_min']).any() or \
            (self.xyz_max != self.scene_boundary['xyz_scene_max']).any():
-            # Depth needs to be cropped & rescaled, if scene bounds have changed
-            self.ray_centers_cam, self.ray_centers_uv, self.ray_idxs = \
-                hypersim_generate_camera_rays(self.new_size, self.M_cam_from_uv)
-            self.P_world = hypersim_generate_pointcloud(self.ray_centers_cam, 
-                self._dataparser_outputs.cameras.camera_to_worlds, all_depths)
-            self.all_depths = hypersim_clip_depths_to_bbox(depths=all_depths, 
-                P_world=self.P_world, poses=self._dataparser_outputs.cameras.camera_to_worlds,
-                xyz_min=self.xyz_min, xyz_max=self.xyz_max)
+            # self.ray_centers_cam, self.ray_centers_uv, self.ray_idxs = \
+            #     hypersim_generate_camera_rays((self.H, self.W), self.M_cam_from_uv)
+            # self.P_world = hypersim_generate_pointcloud(self.ray_centers_cam, 
+            #     self._dataparser_outputs.cameras.camera_to_worlds, all_depths)
+            # self.all_depths = hypersim_clip_depths_to_bbox(depths=all_depths, 
+            #     P_world=self.P_world, poses=self._dataparser_outputs.cameras.camera_to_worlds,
+            #     xyz_min=self.xyz_min, xyz_max=self.xyz_max)
+            warnings.warn(f"Scene bounds have changed, so depth values need to be cropped and rescaled, but it is buggy and we skip it. Hence depth metrics will be incorrect")
+            self.all_depths = all_depths
         else:
             self.all_depths = all_depths
         # Scale depth with respect to scene scaling factor (calculated in dataparser)
