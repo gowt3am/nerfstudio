@@ -234,7 +234,7 @@ def _cluster_normals(normals: TensorType, device: torch.device,
     # Default min, max per centroids are 39, 256, changed to suppress warnings
     kmeans = faiss.Kmeans(d = 3, k = num_clusters, niter = num_iterations,
                           gpu = False, spherical = True, verbose = False,
-                          min_points_per_centroid = 3, max_points_per_centroid = 256)
+                          min_points_per_centroid = 39, max_points_per_centroid = 256)
     kmeans.train(normals)
     
     # Extract cluster membership for each normal

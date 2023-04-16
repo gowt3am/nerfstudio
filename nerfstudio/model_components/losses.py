@@ -542,7 +542,7 @@ class ManhattanNormalLoss(nn.Module):
     3. normal_manhattan_l1      - Forces estimated normals to be close to Manhattan
                                   frame clusters by L1 norm
     """
-    def __init__(self, min_cluster_similarity: float = 0.9,
+    def __init__(self, min_cluster_similarity: float = 0.99,
                 manhattan_orthogonal_dot_weight: float = 2e-3,
                 normal_manhattan_dot_weight: float = 2e-3,
                 normal_manhattan_l1_weight: float = 2e-3, start_step: int = 500,

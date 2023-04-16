@@ -139,6 +139,8 @@ class ManhattanNerfactoModelConfig(ModelConfig):
     use_appearance_embedding: bool = True
     """Whether to use appearance embedding."""
     
+    estimate_normal_from_depth: bool = True
+    """Whether to estimate normal from depth, or render them as derivative of density (RefNeRF)"""
     opacity_penalty_weight: float = 1e-3
     """Weight for opacity penalty loss."""
     min_cluster_similarity: float = 0.99
@@ -316,7 +318,7 @@ class ManhattanNerfactoModel(Model):
 
     def get_outputs(self, ray_bundle: RayBundle, **kwargs):
         ray_samples, weights_list, ray_samples_list = self.proposal_sampler(ray_bundle, density_fns=self.density_fns)
-        field_outputs = self.field(ray_samples, compute_normals=self.config.predict_normals)
+        field_outputs = self.field(ray_samples, compute_normals=True)
         weights = ray_samples.get_weights(field_outputs[FieldHeadNames.DENSITY])
         weights_list.append(weights)
         ray_samples_list.append(ray_samples)
@@ -325,21 +327,26 @@ class ManhattanNerfactoModel(Model):
         depth = self.renderer_depth(weights=weights, ray_samples=ray_samples)
         accumulation = self.renderer_accumulation(weights=weights)
 
-        if self.estimate_normals and not kwargs.get("continuous_pixels"):
-            normals, normal_valid_mask = hypersim_normals_from_ray_depths(ray_bundle, depth)
-            outputs = {
-                "rgb": rgb,
-                "accumulation": accumulation,
-                "depth": depth,
-                "normals": normals,
-                "normal_valid_mask": normal_valid_mask,
-            }
-        else:
-            outputs = {
-                "rgb": rgb,
-                "accumulation": accumulation,
-                "depth": depth,
-            }
+        outputs = {
+            "rgb": rgb,
+            "accumulation": accumulation,
+            "depth": depth,
+        }
+
+        if self.estimate_normals:
+            if self.config.estimate_normal_from_depth and not kwargs.get("continuous_pixels"):
+                # Estimating normals from depth (need ray_bundle to be ordered as P1 | P2 | P3)
+                normals, normal_valid_mask = hypersim_normals_from_ray_depths(ray_bundle, depth)
+            else: 
+                # Rendering normals as derivative of field density
+                normals = self.renderer_normals(normals=field_outputs[FieldHeadNames.NORMALS], weights=weights)
+                normal_valid_mask = torch.ones_like(normals[..., 0]) > 0
+                outputs["rendered_orientation_loss"] = orientation_loss(
+                    weights.detach(), field_outputs[FieldHeadNames.NORMALS], ray_bundle.directions
+                )
+            outputs["normals"] = normals
+            outputs["normal_valid_mask"] = normal_valid_mask
+            outputs["normals_vis"] = self.normals_shader(normals)
 
         if self.config.predict_normals:
             normals = self.renderer_normals(normals=field_outputs[FieldHeadNames.NORMALS], weights=weights)
@@ -391,6 +398,11 @@ class ManhattanNerfactoModel(Model):
                                         self.opacity_loss(outputs["accumulation"])
         if self.estimate_normals and "normals" in outputs:
             loss_dict.update(self.manhattan_normal_loss(outputs["normals"][outputs["normal_valid_mask"]], step))
+            # Just for debugging, tested with direct supervision of normals
+            # loss_dict["normal_mse"] = 0.001 * self.rgb_loss(batch["normals"].to(self.device)[outputs["normal_valid_mask"]],
+            #                                      outputs["normals"][outputs["normal_valid_mask"]])
+            if "rendered_orientation_loss" in outputs:
+                loss_dict["orientation_loss"] = self.config.orientation_loss_mult * torch.mean(outputs["rendered_orientation_loss"])
         
         if self.training:
             loss_dict["interlevel_loss"] = self.config.interlevel_loss_mult * interlevel_loss(
@@ -453,4 +465,9 @@ class ManhattanNerfactoModel(Model):
                 accumulation=outputs["accumulation"],
             )
             images_dict[key] = prop_depth_i
+
+        if "normals_vis" in outputs:
+            normal_gt = (batch["normals"].to(self.device) + 1.0) / 2.0
+            combined_normal = torch.cat([normal_gt, outputs["normals_vis"]], dim=1)
+            images_dict["normals"] = combined_normal
         return metrics_dict, images_dict
