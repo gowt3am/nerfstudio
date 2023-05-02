@@ -37,7 +37,7 @@ class HyperSimDataManagerConfig(VanillaDataManagerConfig):
     """Labels/Files to load"""
     ray_sampling_strategy: str = "triangle"
     """The ray sampling strategy to use. Options are "triangle" and "uniform"."""
-    dilation_rate: int = 0
+    dilation_rate: int = 2
     """The dilation factor to use for the triangle pixel sampler."""
 
 

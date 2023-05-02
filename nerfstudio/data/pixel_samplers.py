@@ -318,8 +318,8 @@ class TrianglePixelSampler(PixelSampler):
         With dilation rate 1:
         ____|____|_x2_|____|____
         ____|____|____|____|____
-        _x3_|____|_x1_|____|____
-        ____|____|____|____|____  
+        _x3_|____|____|____|____
+        ____|____|_x1_|____|____  
         ____|____|____|____|____
     Args:
         num_rays_per_batch: number of rays to sample per batch (will be divided by 3 for triangles)

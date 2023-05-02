@@ -227,7 +227,7 @@ def _find_opposite(similarities, center_idxs, c_idx, old_assignments,
         return False, None
 
 def _cluster_normals(normals: TensorType, device: torch.device,
-        num_clusters: int = 20, num_iterations: int = 20, similar_threshold: float = 0.9, 
+        num_clusters: int = 20, num_iterations: int = 20, similar_threshold: float = 0.99, 
         merge_clusters: bool = True, find_opposites = True):
     """Clusters normals using K-means, and merges clusters that are similar"""
     # K-means clustering using faiss library

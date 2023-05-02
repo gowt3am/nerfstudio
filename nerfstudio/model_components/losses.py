@@ -598,6 +598,9 @@ class ManhattanNormalLoss(nn.Module):
         cluster_1 = normals_orthogonal[normal_clusters == 1]
         cluster_2 = normals_orthogonal[normal_clusters == 2]
         cluster_3 = normals_orthogonal[normal_clusters == 3]
+        if (step % 1000 == 0):
+            print(f'Cluster sizes: {cluster_1.shape[0]}, {cluster_2.shape[0]}, {cluster_3.shape[0]}')
+
         c_1 = F.normalize(cluster_1.mean(dim = 0, keepdim = True), p = 2.0, dim = -1)
         c_2 = F.normalize(cluster_2.mean(dim = 0, keepdim = True), p = 2.0, dim = -1)
         c_3 = F.normalize(cluster_3.mean(dim = 0, keepdim = True), p = 2.0, dim = -1)

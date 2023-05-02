@@ -134,14 +134,14 @@ class ManhattanNerfactoModelConfig(ModelConfig):
     """Whether use single jitter or not for the proposal networks."""
     predict_normals: bool = False
     """Whether to predict normals or not."""
-    disable_scene_contraction: bool = False
-    """Whether to disable scene contraction or not."""
-    use_appearance_embedding: bool = True
+    disable_scene_contraction: bool = False # Change later to True
+    """Whether to disable scene contraction or not. If disabled, also uses AABBCollider instead of NearFar"""
+    use_appearance_embedding: bool = False
     """Whether to use appearance embedding."""
     
     estimate_normal_from_depth: bool = True
     """Whether to estimate normal from depth, or render them as derivative of density (RefNeRF)"""
-    opacity_penalty_weight: float = 1e-3
+    opacity_penalty_weight: float = -1.0 #1e-3
     """Weight for opacity penalty loss."""
     min_cluster_similarity: float = 0.99
     """Minimum dot product between cluster and normal to be considered similar."""
@@ -151,9 +151,9 @@ class ManhattanNerfactoModelConfig(ModelConfig):
     """Weight for normals to be close to manhattan cluster - dot product."""
     normal_manhattan_cluster_l1_weight: float = 2e-3
     """Weight for normals to be close to manhattan cluster - L1 loss."""
-    manhattan_loss_start_step: int = 500
+    manhattan_loss_start_step: int = 1500
     """Step at which to start the manhattan losses."""
-    manhattan_loss_grow_till_step: int = 2500
+    manhattan_loss_grow_till_step: int = 3500
     """Step at which to stop growing the manhattan loss and it becomes specified value."""
     manhattan_loss_stop_step: int = -1
     """Step at which to stop using manhattan loss. -1 will never stop."""
@@ -243,17 +243,19 @@ class ManhattanNerfactoModel(Model):
         )
 
         # Collider
-        self.collider = NearFarCollider(near_plane=self.config.near_plane, far_plane=self.config.far_plane)
+        if self.config.disable_scene_contraction:
+            self.collider = AABBBoxCollider(self.scene_box)
+        else:
+            self.collider = NearFarCollider(near_plane=self.config.near_plane, far_plane=self.config.far_plane)
 
         # renderers
         self.renderer_rgb = RGBRenderer(background_color=self.config.background_color)
         self.renderer_accumulation = AccumulationRenderer()
         self.renderer_depth = DepthRenderer()
         self.renderer_normals = NormalsRenderer()
-        self.estimate_normals = (self.config.normal_manhattan_cluster_dot_weight > 0 or
+        self.use_normal_losses = (self.config.normal_manhattan_cluster_dot_weight > 0 or
                                 self.config.normal_manhattan_cluster_l1_weight > 0 or
                                 self.config.manhattan_orthogonal_dot_weight > 0)
-        self.calc_normal_metrics = self.config.calc_normal_metrics and self.estimate_normals
 
         # shaders
         self.normals_shader = NormalsShader()
@@ -333,17 +335,18 @@ class ManhattanNerfactoModel(Model):
             "depth": depth,
         }
 
-        if self.estimate_normals:
-            if self.config.estimate_normal_from_depth and not kwargs.get("continuous_pixels"):
-                # Estimating normals from depth (need ray_bundle to be ordered as P1 | P2 | P3)
-                normals, normal_valid_mask = hypersim_normals_from_ray_depths(ray_bundle, depth)
-            else: 
-                # Rendering normals as derivative of field density
-                normals = self.renderer_normals(normals=field_outputs[FieldHeadNames.NORMALS], weights=weights)
-                normal_valid_mask = torch.ones_like(normals[..., 0]) > 0
-                outputs["rendered_orientation_loss"] = orientation_loss(
-                    weights.detach(), field_outputs[FieldHeadNames.NORMALS], ray_bundle.directions
-                )
+        if self.config.estimate_normal_from_depth and self.use_normal_losses and not kwargs.get("continuous_pixels"):
+            # Estimating normals from depth (need ray_bundle to be ordered as P1 | P2 | P3)
+            normals, normal_valid_mask = hypersim_normals_from_ray_depths(ray_bundle, depth)
+            outputs["normals"] = normals
+            outputs["normal_valid_mask"] = normal_valid_mask
+        else: 
+            # Rendering normals as derivative of field density
+            normals = self.renderer_normals(normals=field_outputs[FieldHeadNames.NORMALS], weights=weights)
+            normal_valid_mask = torch.ones_like(normals[..., 0]) > 0
+            outputs["rendered_orientation_loss"] = orientation_loss(
+                weights.detach(), field_outputs[FieldHeadNames.NORMALS], ray_bundle.directions
+            )
             outputs["normals"] = normals
             outputs["normal_valid_mask"] = normal_valid_mask
             outputs["normals_vis"] = self.normals_shader(normals)
@@ -382,9 +385,10 @@ class ManhattanNerfactoModel(Model):
         if self.config.calc_depth_metrics:
             metrics_dict["rmse_depth"] = self.rmse_depth(outputs["depth"].squeeze(), batch["depth"].to(self.device))
             metrics_dict["abs_depth"] = self.abs_depth(outputs["depth"].squeeze(), batch["depth"].to(self.device))
-        if self.calc_normal_metrics and "normals" in outputs:
+        if self.config.calc_normal_metrics and "normals" in outputs:
             metrics_dict["angular_normal"] = self.angular_normal(outputs["normals"], batch["normals"].to(self.device))
 
+        # metrics_dict.update(self.manhattan_normal_loss(outputs["normals"][outputs["normal_valid_mask"]], 4000))
         if self.training:
             metrics_dict["distortion"] = distortion_loss(outputs["weights_list"], outputs["ray_samples_list"])
         return metrics_dict
@@ -396,7 +400,7 @@ class ManhattanNerfactoModel(Model):
         if self.config.opacity_penalty_weight > 0:
             loss_dict["opacity"] = self.config.opacity_penalty_weight * \
                                         self.opacity_loss(outputs["accumulation"])
-        if self.estimate_normals and "normals" in outputs:
+        if self.use_normal_losses and "normals" in outputs:
             loss_dict.update(self.manhattan_normal_loss(outputs["normals"][outputs["normal_valid_mask"]], step))
             # Just for debugging, tested with direct supervision of normals
             # loss_dict["normal_mse"] = 0.001 * self.rgb_loss(batch["normals"].to(self.device)[outputs["normal_valid_mask"]],
@@ -453,7 +457,7 @@ class ManhattanNerfactoModel(Model):
             pred_depth = outputs["depth"].squeeze()
             metrics_dict.update({"rmse_depth" : self.rmse_depth(tgt_depth, pred_depth),
                                  "abs_depth" : self.abs_depth(tgt_depth, pred_depth)})
-        if self.calc_normal_metrics and "normals" in outputs:
+        if self.config.calc_normal_metrics and "normals" in outputs:
             metrics_dict.update({"angular_normal" : self.angular_normal(
                         batch["normals"].to(self.device), outputs["normals"])})
 

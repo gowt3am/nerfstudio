@@ -98,11 +98,10 @@ method_configs["manhattan-nerfacto"] = TrainerConfig(
     pipeline=VanillaPipelineConfig(
         datamanager=HyperSimDataManagerConfig(
             dataparser=HyperSimDataParserConfig(),
-            train_num_rays_per_batch=4095,
-            eval_num_rays_per_batch=4095,
+            train_num_rays_per_batch=8190,
+            eval_num_rays_per_batch=8190,
         ),
         model=ManhattanNerfactoModelConfig(eval_num_rays_per_chunk=1 << 15,
-                                           opacity_penalty_weight = -1.0,
                                            manhattan_orthogonal_dot_weight = 2e-3,
                                            normal_manhattan_cluster_dot_weight = 2e-3,
                                            normal_manhattan_cluster_l1_weight = 2e-3),
