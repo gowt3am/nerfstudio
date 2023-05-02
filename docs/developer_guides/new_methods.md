@@ -10,6 +10,7 @@ We recommend the following file structure:
 
 ```
 ├── my_method
+│   ├── __init__.py
 │   ├── my_config.py
 │   ├── custom_pipeline.py [optional]
 │   ├── custom_model.py [optional]
@@ -56,6 +57,9 @@ dependencies = [
     "nerfstudio" # you may want to consider pinning the version, ie "nerfstudio==0.1.19"
 ]
 
+[tool.setuptools.packages.find]
+include = ["my_method*"]
+
 [project.entry-points.'nerfstudio.method_configs']
 my-method = 'my_method.my_config:MyMethod'
 ```
@@ -73,3 +77,7 @@ After registering your method you should be able to run the method with,
 ```
 ns-train my-method --data DATA_DIR
 ```
+
+## Adding to the _nerf.studio_ documentation
+
+We invite researchers to contribute their own methods to our online documentation. You can find more information on how to do this {ref}`here<own_method_docs>`.
