@@ -163,7 +163,6 @@ def hypersim_clip_depths_to_bbox(depths: TensorType, P_world: TensorType,
     return rearrange(depth * S, 'b (h w) -> b h w', h=h)
 
 
-@torch.cuda.amp.autocast(dtype=torch.float32)
 def hypersim_normals_from_ray_depths(ray_bundle: RayBundle, ray_depth: TensorType) \
                                                 -> Tuple[TensorType, TensorType]:
     """Compute normals from sets of triangular rays of the below form
@@ -187,12 +186,11 @@ def hypersim_normals_from_ray_depths(ray_bundle: RayBundle, ray_depth: TensorTyp
     normals = torch.cross((P2_world - P1_world), (P3_world - P1_world), dim = -1)
     normals = F.normalize(normals, p = 2.0, dim = -1)
 
-    # TODO: Processing invalid depth and normals
+    # Processing invalid depth and normals
     invalid_depth = (ray_depth == 0.0) + torch.isnan(ray_depth) + torch.isinf(ray_depth)
     P1_invalid = invalid_depth[:N, 0]
     P2_invalid = invalid_depth[N:2*N, 0]
     P3_invalid = invalid_depth[2*N: 3*N, 0]  
-
     norm_invalid = (torch.abs(normals).sum(-1) == 0.0) + torch.isnan(normals).sum(-1) + torch.isinf(normals).sum(-1)
     invalid_normals = P1_invalid + P2_invalid + P3_invalid + norm_invalid
     normals[invalid_normals] = torch.zeros(3, device=ray_depth.device)

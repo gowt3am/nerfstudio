@@ -627,6 +627,40 @@ class ManhattanNormalLoss(nn.Module):
         }
         return output_loss_dict
     
+class NormalSupervisionLoss(nn.Module):
+    """Supervision with Ground truth normals - Uses l1 & dot losses
+    """
+
+    def __init__(self, dot_weight: float = 1e-3, l1_weight: float = 1e-3, start_step: int = 500,
+                grow_till_step: int = 2500, end_step: int = -1):
+        super().__init__()
+        self.l1 = L1Loss()
+        self.dot = lambda x, y: (1.0 - torch.nn.CosineSimilarity(dim=-1)(x, y)).mean()
+        self.dot_weight = dot_weight
+        self.l1_weight = l1_weight
+
+        self.start_step = start_step
+        self.end_step = end_step
+        self.weight_schedule = lambda weight, step : max(0, min(weight, \
+                    weight * (step - start_step) / (grow_till_step - start_step)))
+        
+    def forward(self, pred_normals: TensorType, gt_normals: TensorType, step: int) -> TensorType:
+        if ((self.end_step != -1) and (step >= self.end_step)) or step < self.start_step:
+            output_loss_dict = {
+                'gt_normal_l1': torch.tensor(0.0, device=pred_normals.device),
+                'gt_normal_dot': torch.tensor(0.0, device=pred_normals.device),
+            }
+            return output_loss_dict
+
+        loss_l1 = self.weight_schedule(self.l1_weight, step) * self.l1(pred_normals, gt_normals)
+        loss_dot = self.weight_schedule(self.dot_weight, step) * self.dot(pred_normals, gt_normals)
+
+        output_loss_dict = {
+            'gt_normal_dot': _loss_validity_filter(loss_dot, pred_normals, 'gt_normal_dot'),
+            'gt_normal_l1': _loss_validity_filter(loss_l1, pred_normals, 'gt_normal_l1')
+        }
+        return output_loss_dict
+    
 def angular_error_normals_degree(pred: TensorType["num_samples", 3],
                                  tgt: TensorType["num_samples", 3]) -> TensorType[0]:
     """

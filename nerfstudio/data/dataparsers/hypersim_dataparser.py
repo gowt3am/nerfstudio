@@ -92,6 +92,7 @@ class HyperSim(DataParser):
         
         # Scene (x,y,z) centered at origin with -0.5 to 0.5 range after scale + shift
         scene_box = SceneBox(aabb=torch.tensor([[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]], dtype=torch.float32))
+        # scene_box = SceneBox(aabb=torch.cat([self.xyz_min / self.config.m_per_asset_unit, self.xyz_max / self.config.m_per_asset_unit], dim=0))
 
         dataparser_outputs = DataparserOutputs(image_filenames=self.all_image_names, cameras=cameras,
             scene_box=scene_box, dataparser_scale=self.scale_factor, dataparser_transform=self.transform,
@@ -283,7 +284,7 @@ class HyperSim(DataParser):
         """Load scene boundary and rescale the scene"""
         # Try to load precomputed if available
         if 'scene_boundary' in self.scene_metadata:
-            print(f'Loading scene boudnary from precomputed scene metadata...')
+            print(f'Loading scene boundary from precomputed scene metadata...')
             self.scene_boundary = self.scene_metadata['scene_boundary']
             for k in self.scene_boundary:
                 self.scene_boundary[k] = torch.tensor(self.scene_boundary[k])
@@ -304,7 +305,10 @@ class HyperSim(DataParser):
         
         # Rescale the pose, because the scene is viewed in [-0.5, 0.5]
         shift = (self.xyz_max + self.xyz_min) / 2
-        scale = (self.xyz_max - self.xyz_min).max().item() / 2 * 1.05 # Enlarge a little so content is within        
+        scale = (self.xyz_max - self.xyz_min).max().item() / 2 * 1.05 # Enlarge a little so content is within
+        # print((self.xyz_max - self.xyz_min).max().item()/2, (self.xyz_max + self.xyz_min) / 2)
+        # shift = torch.tensor([0, 0, 0])
+        # scale = 0.5 / self.config.m_per_asset_unit
         self.poses[:, :3, 3] -= shift.unsqueeze(0)
         self.poses[:, :3, 3] /= 2*scale
         
