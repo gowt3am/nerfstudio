@@ -16,11 +16,11 @@
 Collection of Losses.
 """
 from enum import Enum
+from typing import Literal
 
 import torch
 from torch import nn
 from torchtyping import TensorType
-from typing_extensions import Literal
 
 from nerfstudio.cameras.rays import RaySamples
 from nerfstudio.utils.math import masked_reduction, normalized_depth_scale_and_shift
@@ -677,3 +677,19 @@ def angular_error_normals_degree(pred: TensorType["num_samples", 3],
     dot_prod = torch.sum((_to_unit(pred) * _to_unit(tgt)), dim = -1)
     ang_errs_rad = torch.acos(torch.clamp(dot_prod, -1, 1))
     return ang_errs_rad.mean() * (180.0/math.pi)
+
+def tv_loss(grids: TensorType["grids", "feature_dim", "row", "column"]) -> TensorType[()]:
+    """
+    https://github.com/apchenstu/TensoRF/blob/4ec894dc1341a2201fe13ae428631b58458f105d/utils.py#L139
+
+    Args:
+        grids: stacks of explicit feature grids (stacked at dim 0)
+    Returns:
+        average total variation loss for neighbor rows and columns.
+    """
+    number_of_grids = grids.shape[0]
+    h_tv_count = grids[:, :, 1:, :].shape[1] * grids[:, :, 1:, :].shape[2] * grids[:, :, 1:, :].shape[3]
+    w_tv_count = grids[:, :, :, 1:].shape[1] * grids[:, :, :, 1:].shape[2] * grids[:, :, :, 1:].shape[3]
+    h_tv = torch.pow((grids[:, :, 1:, :] - grids[:, :, :-1, :]), 2).sum()
+    w_tv = torch.pow((grids[:, :, :, 1:] - grids[:, :, :, :-1]), 2).sum()
+    return 2 * (h_tv / h_tv_count + w_tv / w_tv_count) / number_of_grids

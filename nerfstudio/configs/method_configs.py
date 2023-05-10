@@ -24,11 +24,11 @@ import tyro
 
 from nerfstudio.cameras.camera_optimizers import CameraOptimizerConfig
 from nerfstudio.configs.base_config import ViewerConfig
-from nerfstudio.data.datamanagers.base_datamanager import VanillaDataManagerConfig
-from nerfstudio.data.datamanagers.depth_datamanager import DepthDataManagerConfig
+from nerfstudio.data.datamanagers.base_datamanager import (
+    VanillaDataManager,
+    VanillaDataManagerConfig
+)
 from nerfstudio.data.datamanagers.hypersim_datamanager import HyperSimDataManagerConfig
-from nerfstudio.data.datamanagers.sdf_datamanager import SDFDataManagerConfig
-from nerfstudio.data.datamanagers.semantic_datamanager import SemanticDataManagerConfig
 from nerfstudio.data.dataparsers.blender_dataparser import BlenderDataParserConfig
 from nerfstudio.data.dataparsers.dnerf_dataparser import DNeRFDataParserConfig
 from nerfstudio.data.dataparsers.dycheck_dataparser import DycheckDataParserConfig
@@ -42,6 +42,9 @@ from nerfstudio.data.dataparsers.phototourism_dataparser import (
 )
 from nerfstudio.data.dataparsers.sdfstudio_dataparser import SDFStudioDataParserConfig
 from nerfstudio.data.dataparsers.sitcoms3d_dataparser import Sitcoms3DDataParserConfig
+from nerfstudio.data.datasets.depth_dataset import DepthDataset
+from nerfstudio.data.datasets.sdf_dataset import SDFDataset
+from nerfstudio.data.datasets.semantic_dataset import SemanticDataset
 from nerfstudio.engine.optimizers import AdamOptimizerConfig, RAdamOptimizerConfig
 from nerfstudio.engine.schedulers import (
     CosineDecaySchedulerConfig,
@@ -85,6 +88,7 @@ descriptions = {
     "nerfplayer-nerfacto": "NeRFPlayer with nerfacto backbone.",
     "nerfplayer-ngp": "NeRFPlayer with InstantNGP backbone.",
     "neus": "Implementation of NeuS. (slow)",
+    "neus-facto": "Implementation of NeuS-Facto. (slow)",
 }
 
 method_configs["manhattan-nerfacto"] = TrainerConfig(
@@ -242,7 +246,8 @@ method_configs["depth-nerfacto"] = TrainerConfig(
     max_num_iterations=30000,
     mixed_precision=True,
     pipeline=VanillaPipelineConfig(
-        datamanager=DepthDataManagerConfig(
+        datamanager=VanillaDataManagerConfig(
+            _target=VanillaDataManager[DepthDataset],
             dataparser=NerfstudioDataParserConfig(),
             train_num_rays_per_batch=4096,
             eval_num_rays_per_batch=4096,
@@ -388,8 +393,11 @@ method_configs["semantic-nerfw"] = TrainerConfig(
     max_num_iterations=30000,
     mixed_precision=True,
     pipeline=VanillaPipelineConfig(
-        datamanager=SemanticDataManagerConfig(
-            dataparser=Sitcoms3DDataParserConfig(), train_num_rays_per_batch=4096, eval_num_rays_per_batch=8192
+        datamanager=VanillaDataManagerConfig(
+            _target=VanillaDataManager[SemanticDataset],
+            dataparser=Sitcoms3DDataParserConfig(),
+            train_num_rays_per_batch=4096,
+            eval_num_rays_per_batch=8192,
         ),
         model=SemanticNerfWModelConfig(eval_num_rays_per_chunk=1 << 16),
     ),
@@ -439,7 +447,9 @@ method_configs["tensorf"] = TrainerConfig(
             train_num_rays_per_batch=4096,
             eval_num_rays_per_batch=4096,
         ),
-        model=TensoRFModelConfig(),
+        model=TensoRFModelConfig(
+            regularization="tv",
+        ),
     ),
     optimizers={
         "fields": {
@@ -520,7 +530,8 @@ method_configs["nerfplayer-nerfacto"] = TrainerConfig(
     max_num_iterations=30000,
     mixed_precision=True,
     pipeline=VanillaPipelineConfig(
-        datamanager=DepthDataManagerConfig(
+        datamanager=VanillaDataManagerConfig(
+            _target=VanillaDataManager[DepthDataset],
             dataparser=DycheckDataParserConfig(),
             train_num_rays_per_batch=4096,
             eval_num_rays_per_batch=4096,
@@ -551,7 +562,11 @@ method_configs["nerfplayer-ngp"] = TrainerConfig(
     max_num_iterations=30000,
     mixed_precision=True,
     pipeline=DynamicBatchPipelineConfig(
-        datamanager=DepthDataManagerConfig(dataparser=DycheckDataParserConfig(), train_num_rays_per_batch=8192),
+        datamanager=VanillaDataManagerConfig(
+            _target=VanillaDataManager[DepthDataset],
+            dataparser=DycheckDataParserConfig(),
+            train_num_rays_per_batch=8192,
+        ),
         model=NerfplayerNGPModelConfig(
             eval_num_rays_per_chunk=8192,
             grid_levels=1,
@@ -580,7 +595,8 @@ method_configs["neus"] = TrainerConfig(
     max_num_iterations=100000,
     mixed_precision=False,
     pipeline=VanillaPipelineConfig(
-        datamanager=SDFDataManagerConfig(
+        datamanager=VanillaDataManagerConfig(
+            _target=VanillaDataManager[SDFDataset],
             dataparser=SDFStudioDataParserConfig(),
             train_num_rays_per_batch=1024,
             eval_num_rays_per_batch=1024,
@@ -613,7 +629,8 @@ method_configs["neus-facto"] = TrainerConfig(
     max_num_iterations=20001,
     mixed_precision=False,
     pipeline=VanillaPipelineConfig(
-        datamanager=SDFDataManagerConfig(
+        datamanager=VanillaDataManagerConfig(
+            _target=VanillaDataManager[SDFDataset],
             dataparser=SDFStudioDataParserConfig(),
             train_num_rays_per_batch=2048,
             eval_num_rays_per_batch=2048,
@@ -655,12 +672,12 @@ method_configs["neus-facto"] = TrainerConfig(
 )
 
 external_methods, external_descriptions = discover_methods()
-method_configs.update(external_methods)
-descriptions.update(external_descriptions)
+all_methods = {**method_configs, **external_methods}
+all_descriptions = {**descriptions, **external_descriptions}
 
 AnnotatedBaseConfigUnion = tyro.conf.SuppressFixed[  # Don't show unparseable (fixed) arguments in helptext.
     tyro.conf.FlagConversionOff[
-        tyro.extras.subcommand_type_from_defaults(defaults=method_configs, descriptions=descriptions)
+        tyro.extras.subcommand_type_from_defaults(defaults=all_methods, descriptions=all_descriptions)
     ]
 ]
 """Union[] type over config types, annotated with default instances for use with
