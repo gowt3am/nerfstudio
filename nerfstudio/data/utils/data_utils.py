@@ -108,18 +108,11 @@ def hypersim_generate_camera_rays(size: Tuple, M_cam_from_uv: TensorType = None)
     uvs = torch.FloatTensor(np.dstack((u, v, np.ones_like(u))))
     ray_centers_uv = rearrange(uvs, 'h w xyz-> (h w) xyz')
 
-    # Create grid of pixel center indices in the uv space
-    u_idx_linspace = np.arange(0, width)
-    v_idx_linspace = np.arange(0, height)
-    u_idx, v_idx = np.meshgrid(u_idx_linspace, v_idx_linspace)
-    idxs = torch.IntTensor(np.dstack((u_idx, v_idx)))
-    ray_idxs = rearrange(idxs, 'h w i-> (h w) i')
-
     # Transfer pixel center positions from uv to the camera space [HW, 3]
     ray_centers_cam = (M_cam_from_uv @ ray_centers_uv.T).T
     # Normalize such that ||ray_dir||=1
     ray_centers_cam = F.normalize(ray_centers_cam, p = 2, dim = -1)
-    return ray_centers_cam, ray_centers_uv, ray_idxs
+    return ray_centers_cam
 
 def hypersim_generate_pointcloud(ray_centers_cam: TensorType,
                                  cam_to_world: TensorType["num_cameras":..., 3, 4],
@@ -131,7 +124,7 @@ def hypersim_generate_pointcloud(ray_centers_cam: TensorType,
     else:
         assert depth.dim() == 3
     # Normalize such that ||ray_dir||=1
-    ray_centers_cam = F.normalize(ray_centers_cam.unsqueeze(0), p = 2, dim = -1)
+    ray_centers_cam = F.normalize(ray_centers_cam.clone().unsqueeze(0), p = 2, dim = -1)
     
     # Converting 3x4 poses into 4x4 poses
     last_row = torch.tensor([0, 0, 0, 1], dtype = cam_to_world.dtype,

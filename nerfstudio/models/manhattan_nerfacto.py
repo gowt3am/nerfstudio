@@ -78,7 +78,7 @@ class ManhattanNerfactoModelConfig(ModelConfig):
     _target: Type = field(default_factory=lambda: ManhattanNerfactoModel)
     near_plane: float = 0.0
     """How far along the ray to start sampling."""
-    far_plane: float = 1000.0
+    far_plane: float = 20.0
     """How far along the ray to stop sampling."""
     background_color: Literal["random", "last_sample", "black", "white"] = "last_sample"
     """Whether to randomize the background color."""

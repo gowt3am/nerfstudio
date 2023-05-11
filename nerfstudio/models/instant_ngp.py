@@ -114,6 +114,8 @@ class NGPModel(Model):
             log2_hashmap_size=self.config.log2_hashmap_size,
             max_res=self.config.max_res,
             spatial_distortion=scene_contraction,
+            appearance_embedding_dim=32 if self.config.use_appearance_embedding else 0,
+            use_average_appearance_embedding=self.config.use_appearance_embedding
         )
 
         self.scene_aabb = Parameter(self.scene_box.aabb.flatten(), requires_grad=False)

@@ -90,9 +90,10 @@ class HyperSim(DataParser):
                           camera_to_worlds=self.poses[:, :3, :4],
                           camera_type=CameraType.PERSPECTIVE)
         
-        # Scene (x,y,z) centered at origin with -0.5 to 0.5 range after scale + shift
-        scene_box = SceneBox(aabb=torch.tensor([[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]], dtype=torch.float32))
-        # scene_box = SceneBox(aabb=torch.cat([self.xyz_min / self.config.m_per_asset_unit, self.xyz_max / self.config.m_per_asset_unit], dim=0))
+        # Scene (x,y,z) centered at origin with -1 to 1 range after scale + shift
+        # Typically used are 1.0 or 1.5
+        # scene_box = SceneBox(aabb=torch.tensor([[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]], dtype=torch.float32))
+        scene_box = SceneBox(aabb=torch.tensor([[-1, -1, -1], [1, 1, 1]], dtype=torch.float32))
 
         dataparser_outputs = DataparserOutputs(image_filenames=self.all_image_names, cameras=cameras,
             scene_box=scene_box, dataparser_scale=self.scale_factor, dataparser_transform=self.transform,
@@ -118,7 +119,7 @@ class HyperSim(DataParser):
     def _load_scene_metadata(self):
         """Load scene statistics - List of images for each camera trajectory"""
         self.scene_name = self.config.data.parts[-1]
-        self.all_metadata_path = self.config.data.parents[0] / "all_scenes_metadata.json"
+        self.all_metadata_path = self.config.data.parents[0] / "all_scenes_metadata_new.json"
         
         # If metadata file available, load it
         if self.all_metadata_path.exists():
@@ -294,8 +295,12 @@ class HyperSim(DataParser):
             raise NotImplementedError('Scene boundary not precomputed; either code ' \
                                       'its computation from depth or precompute it')
 
-        if 'xyz_cam1p5_min' in self.scene_boundary:
-            print(f'Using cropped boundaries...')
+        if 'xyz_manual_min' in self.scene_boundary:
+            print(f'Using Gowtham manually cropped boundaries...')
+            self.xyz_min = self.scene_boundary['xyz_manual_min']
+            self.xyz_max = self.scene_boundary['xyz_manual_max']
+        elif 'xyz_cam1p5_min' in self.scene_boundary:
+            print(f'Using Nikola\'s algorithm cropped boundaries...')
             self.xyz_min = self.scene_boundary['xyz_cam1p5_min']
             self.xyz_max = self.scene_boundary['xyz_cam1p5_max']
         else:
@@ -303,12 +308,10 @@ class HyperSim(DataParser):
             self.xyz_min = self.scene_boundary['xyz_scene_min']
             self.xyz_max = self.scene_boundary['xyz_scene_max']
         
-        # Rescale the pose, because the scene is viewed in [-0.5, 0.5]
+        # Rescale the pose, because the scene is viewed in [-1, 1]
         shift = (self.xyz_max + self.xyz_min) / 2
-        scale = (self.xyz_max - self.xyz_min).max().item() / 2 * 1.05 # Enlarge a little so content is within
-        # print((self.xyz_max - self.xyz_min).max().item()/2, (self.xyz_max + self.xyz_min) / 2)
-        # shift = torch.tensor([0, 0, 0])
-        # scale = 0.5 / self.config.m_per_asset_unit
+        scale = (self.xyz_max - self.xyz_min).max().item() / 2.0 * 1.2 # Enlarge a little, so main scene is fully enclosed
+        scale = scale / 2.0   # 2.0 scales the scene to [-1, 1]. If 4.0: [-2, 2]
         self.poses[:, :3, 3] -= shift.unsqueeze(0)
         self.poses[:, :3, 3] /= 2*scale
         
