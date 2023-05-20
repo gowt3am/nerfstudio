@@ -110,12 +110,12 @@ def hypersim_generate_camera_rays(size: Tuple, M_cam_from_uv: TensorType = None)
 
     # Transfer pixel center positions from uv to the camera space [HW, 3]
     ray_centers_cam = (M_cam_from_uv @ ray_centers_uv.T).T
-    # Normalize such that ||ray_dir||=1
+    # Normalize such that ||ray||=1 [Assuming depth is distance and not z-coordinate]
     ray_centers_cam = F.normalize(ray_centers_cam, p = 2, dim = -1)
     return ray_centers_cam
 
 def hypersim_generate_pointcloud(ray_centers_cam: TensorType,
-                                 cam_to_world: TensorType["num_cameras":..., 3, 4],
+                                 poses: TensorType["num_cameras":..., 4, 4],
                                  depths: TensorType) -> TensorType:
     """Generates a pointcloud from depth values for the Hypersim dataset"""
     depth = rearrange(depths.clone(), 'b h w -> b (h w)') 
@@ -123,13 +123,8 @@ def hypersim_generate_pointcloud(ray_centers_cam: TensorType,
         depth = depth.unsqueeze(-1)
     else:
         assert depth.dim() == 3
-    # Normalize such that ||ray_dir||=1
+    # Normalize such that ||ray||=1 [Assuming depth is distance and not z-coordinate]
     ray_centers_cam = F.normalize(ray_centers_cam.clone().unsqueeze(0), p = 2, dim = -1)
-    
-    # Converting 3x4 poses into 4x4 poses
-    last_row = torch.tensor([0, 0, 0, 1], dtype = cam_to_world.dtype,
-                            device = cam_to_world.device).view(1, 1, 4).repeat(cam_to_world.shape[0], 1, 1)
-    poses = torch.cat((cam_to_world, last_row), dim = 1)
 
     P_cam = ray_centers_cam * depth
     P_cam = torch.cat((P_cam, torch.ones_like(depth)), dim = -1)
@@ -138,7 +133,7 @@ def hypersim_generate_pointcloud(ray_centers_cam: TensorType,
     return P_world[:, :, :3] / P_world[:, :, 3:4]
 
 def hypersim_clip_depths_to_bbox(depths: TensorType, P_world: TensorType,
-                                 poses: TensorType["num_cameras":..., 3, 4],
+                                 poses: TensorType["num_cameras":..., 4, 4],
                                  xyz_min: TensorType, xyz_max: TensorType) -> TensorType:
     h = depths.shape[1]
     depth = rearrange(depths.clone(), 'b h w -> b (h w)')

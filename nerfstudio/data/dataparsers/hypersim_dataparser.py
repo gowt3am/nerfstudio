@@ -106,7 +106,8 @@ class HyperSim(DataParser):
                       "H_orig": self.config.height, "W_orig": self.config.width,
                       "scene_boundary": self.scene_boundary,
                       "xyz_min": self.xyz_min, "xyz_max": self.xyz_max,
-                      "M_cam_from_uv": self.M_cam_from_uv})
+                      "M_cam_from_uv": self.M_cam_from_uv,
+                      "orig_poses": self.orig_poses})
         return dataparser_outputs
 
     def _load_m_per_asset_unit(self):
@@ -312,6 +313,7 @@ class HyperSim(DataParser):
         shift = (self.xyz_max + self.xyz_min) / 2
         scale = (self.xyz_max - self.xyz_min).max().item() / 2.0 * 1.2 # Enlarge a little, so main scene is fully enclosed
         scale = scale / 2.0   # 2.0 scales the scene to [-1, 1]. If 4.0: [-2, 2]
+        self.orig_poses = self.poses.clone()
         self.poses[:, :3, 3] -= shift.unsqueeze(0)
         self.poses[:, :3, 3] /= 2*scale
         

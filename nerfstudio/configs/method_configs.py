@@ -72,9 +72,9 @@ from nerfstudio.plugins.registry import discover_methods
 
 method_configs: Dict[str, TrainerConfig] = {}
 descriptions = {
-    "manhattan-nerfacto-big": "Larger version of Manhattan-Nerfacto. (slow and long)",
     "manhattan-nerfacto": "Same as Manhattan-INGP but with Nerfacto backbone (currently only works with hypersim)",
     "nerfacto": "Recommended real-time model tuned for real captures. This model will be continually updated.",
+    "nerfacto-big": "Larger version of nerfacto. (slow and long)",
     "depth-nerfacto": "Nerfacto with depth supervision.",
     "volinga": "Real-time rendering model from Volinga. Directly exportable to NVOL format at https://volinga.ai/",
     "instant-ngp": "Implementation of Instant-NGP. Recommended real-time model for unbounded scenes.",
@@ -118,48 +118,6 @@ method_configs["manhattan-nerfacto"] = TrainerConfig(
         "fields": {
             "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-15),
             "scheduler": ExponentialDecaySchedulerConfig(lr_final=0.0001, max_steps=200000),
-        },
-    },
-    viewer=ViewerConfig(num_rays_per_chunk=1 << 15),
-    vis="viewer",
-)
-method_configs["manhattan-nerfacto-big"] = TrainerConfig(
-    method_name="manhattan-nerfacto",
-    steps_per_eval_batch=1000,
-    steps_per_eval_image=99990,
-    steps_per_save=2000,
-    steps_per_eval_all_images=99990,
-    max_num_iterations=100000,
-    mixed_precision=True,
-    pipeline=VanillaPipelineConfig(
-        datamanager=HyperSimDataManagerConfig(
-            dataparser=HyperSimDataParserConfig(),
-            train_num_rays_per_batch=4095,
-            eval_num_rays_per_batch=4095,
-        ),
-        model=ManhattanNerfactoModelConfig(
-            manhattan_orthogonal_dot_weight = 2e-3,
-            normal_manhattan_cluster_dot_weight = 2e-3,
-            normal_manhattan_cluster_l1_weight = 2e-3,
-            eval_num_rays_per_chunk=1 << 15,
-            num_nerf_samples_per_ray=128,
-            num_proposal_samples_per_ray=(512, 256),
-            hidden_dim=128,
-            hidden_dim_color=128,
-            hidden_dim_transient=128,
-            max_res=3000,
-            proposal_weights_anneal_max_num_iters=5000,
-            log2_hashmap_size=21,
-        ),
-    ),
-    optimizers={
-        "proposal_networks": {
-            "optimizer": RAdamOptimizerConfig(lr=1e-2, eps=1e-15),
-            "scheduler": None,
-        },
-        "fields": {
-            "optimizer": RAdamOptimizerConfig(lr=1e-2, eps=1e-15),
-            "scheduler": ExponentialDecaySchedulerConfig(lr_final=1e-4, max_steps=100000),
         },
     },
     viewer=ViewerConfig(num_rays_per_chunk=1 << 15),
