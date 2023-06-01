@@ -521,6 +521,25 @@ class MSELossFiltered(nn.Module):
         loss = self.mse(prediction, target)
         return _loss_validity_filter(loss, prediction, 'MSELoss')
     
+class GainCompensatedMSE(nn.Module):
+    """
+        MSE Loss + Validity Filter, with gain compensation
+
+        Alpha, Beta have num_test_data elements, initialized with 1, 0.
+        Based on which image index is rendered, we use the corresponding
+        alpha, beta to compensate the rendered image as a*pred + b
+    """
+    def __init__(self):
+        super().__init__()
+        self.mse = MSELoss()
+
+    def forward(self, prediction: TensorType, target: TensorType, indices: TensorType,
+                alpha: TensorType, beta: TensorType) -> TensorType:
+        a = alpha[indices]
+        b = beta[indices]
+        loss = self.mse(a * prediction + b, target)
+        return _loss_validity_filter(loss, prediction, 'GainCompMSELoss')
+
 class OpacityLoss(nn.Module):
     """Encourages opacity to be either 0 or 1 to avoid floater"""
     def __init__(self):

@@ -23,6 +23,7 @@ from typing import Dict
 import numpy as np
 import torch
 import torch.nn.functional as F
+from PIL import Image
 from typing import List
 from torchtyping import TensorType
 
@@ -39,15 +40,20 @@ class HyperSimDataset(InputDataset):
         scale_factor: The downscaling factor for the dataparser outputs.
     """
     def __init__(self, dataparser_outputs: DataparserOutputs, scale_factor: float = 1.0,
-                 labels: List[str] = []):
+                 labels: List[str] = [], test_tuning: bool = False):
         super().__init__(dataparser_outputs, scale_factor)
         self.labels = labels
+        self.test_tuning = test_tuning
+        if self.test_tuning:
+            self.labels = labels + ["reconstructed", "mask"]
         self.img_filenames = dataparser_outputs.image_filenames
         self.depth_filenames = self.metadata["depth_filenames"]
         self.normal_filenames = self.metadata["normal_filenames"]
         self.semantic_filenames = self.metadata["semantic_filenames"]
         self.semantic_instance_filenames = self.metadata["semantic_instance_filenames"]
         self.entity_id_filenames = self.metadata["entity_id_filenames"]
+        self.reconstructed_image_filenames = self.metadata["reconstructed_image_filenames"]
+        self.reconstructed_mask_filenames = self.metadata["reconstructed_mask_filenames"]
         self.m_per_asset_unit = self.metadata["m_per_asset_unit"]
         self.H_orig = self.metadata["H_orig"]
         self.W_orig = self.metadata["W_orig"]
@@ -148,6 +154,13 @@ class HyperSimDataset(InputDataset):
             elif label == 'semantics':
                 content = F.interpolate(torch.unsqueeze(content, dim = 0).float(),
                     size = self.new_size, mode='nearest').squeeze(0).type(content.dtype)
+            elif label == 'reconstructed':
+                content = F.interpolate(content.permute(2,0,1), size = self.new_size,
+                                        mode='bilinear').permute(1,2,0)
+            elif label == 'mask':
+                content = F.interpolate(torch.unsqueeze(content, dim = 0).float(),
+                    size = self.new_size, mode='nearest').squeeze(0).type(content.dtype)
+                
         return content
 
     def get_metadata(self, data: Dict) -> Dict:
@@ -194,6 +207,19 @@ class HyperSimDataset(InputDataset):
                     content[content == 20] = 2
                     wall_floor_mask = (content == 1) + (content == 2)
                     content[np.logical_not(wall_floor_mask)] = 3
+
+            elif label == "reconstructed":
+                content = np.array(Image.open(self.reconstructed_image_filenames[image_idx], 'r')).astype('float32')
+                if content is None:
+                    content = np.zeros((self.H_orig, self.W_orig, 3), dtype=np.float32)
+                zero_vect = np.zeros(3, dtype=content.dtype)
+                content[np.isnan(np.abs(content).sum(axis=-1))] = zero_vect
+
+            elif label == "mask":
+                content = np.array(Image.open(self.reconstructed_mask_filenames[image_idx], 'r')).astype('float32')
+                if content is None:
+                    content = np.ones((self.H_orig, self.W_orig), dtype=np.float32)*255.0
+                content[np.isnan(np.abs(content).sum(axis=-1))] = 255.0
             else:
                 raise NotImplementedError(f"Label {label} is not implemented")
             

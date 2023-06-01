@@ -45,6 +45,7 @@ from nerfstudio.fields.density_fields import HashMLPDensityField
 from nerfstudio.fields.nerfacto_field import TCNNNerfactoField
 from nerfstudio.model_components.losses import (
     MSELossFiltered,
+    GainCompensatedMSE,
     OpacityLoss,
     ManhattanNormalLoss,
     NormalSupervisionLoss,
@@ -262,6 +263,7 @@ class ManhattanNerfactoModel(Model):
 
         # losses
         self.rgb_loss = MSELossFiltered()
+        self.gain_compensated_rgb_loss = GainCompensatedMSE()
         self.opacity_loss = OpacityLoss()
         self.manhattan_normal_loss = ManhattanNormalLoss(
             min_cluster_similarity=self.config.min_cluster_similarity,
@@ -287,10 +289,15 @@ class ManhattanNerfactoModel(Model):
         self.abs_depth = MeanAbsoluteError()
         self.angular_normal = angular_error_normals_degree
 
+        # Parameters for gain compensation for test set tuning
+        self.alpha = Parameter(torch.ones(self.num_test_data))
+        self.beta = Parameter(torch.zeros(self.num_test_data))
+
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
         param_groups = {}
         param_groups["proposal_networks"] = list(self.proposal_networks.parameters())
         param_groups["fields"] = list(self.field.parameters())
+        param_groups["gain_compensation"] = [self.alpha, self.beta]
         return param_groups
 
     def get_training_callbacks(
@@ -402,7 +409,11 @@ class ManhattanNerfactoModel(Model):
 
     def get_loss_dict(self, outputs, batch, step, metrics_dict=None):
         loss_dict = {}
-        loss_dict["rgb"] = self.rgb_loss(batch["image"].to(self.device), outputs["rgb"])
+        if self.test_tuning:
+            loss_dict["rgb"] = self.rgb_loss(batch["reconstructed"].to(self.device), outputs["rgb"],
+                                             batch["indices"].to(self.device), self.alpha, self.beta)
+        else:
+            loss_dict["rgb"] = self.rgb_loss(batch["image"].to(self.device), outputs["rgb"])
         
         if self.config.opacity_penalty_weight > 0:
             loss_dict["opacity"] = self.config.opacity_penalty_weight * self.opacity_loss(outputs["accumulation"])

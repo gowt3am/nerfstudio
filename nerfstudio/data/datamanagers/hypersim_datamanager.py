@@ -66,6 +66,8 @@ class HyperSimDataManager(VanillaDataManager):  # pylint: disable=abstract-metho
         self, dataset: InputDataset, *args: Any, **kwargs: Any) -> PixelSampler:
         """Infer which pixel sampler to use."""
         if self.config.ray_sampling_strategy == "triangle":
+            if self.test_tuning:
+                raise ValueError("Triangle pixel sampler is not supported for test tuning with masks currently, use uniform.")
             return TrianglePixelSampler(*args, **kwargs, height = dataset.H,
                     width = dataset.W, dilation_rate = self.config.dilation_rate)
         elif self.config.ray_sampling_strategy == "uniform":
@@ -76,9 +78,9 @@ class HyperSimDataManager(VanillaDataManager):  # pylint: disable=abstract-metho
     def create_train_dataset(self) -> HyperSimDataset:
         return HyperSimDataset(dataparser_outputs=self.train_dataparser_outputs,
                                scale_factor=self.config.camera_res_scale_factor,
-                               labels=self.config.labels)
+                               labels=self.config.labels, test_tuning=self.test_tuning)
 
     def create_eval_dataset(self) -> HyperSimDataset:
         return HyperSimDataset(dataparser_outputs=self.dataparser.get_dataparser_outputs(
             split=self.test_split), scale_factor=self.config.camera_res_scale_factor,
-            labels=self.config.labels)
+            labels=self.config.labels, test_tuning=False)

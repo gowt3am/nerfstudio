@@ -400,6 +400,7 @@ class VanillaDataManager(DataManager, Generic[TDataset]):  # pylint: disable=abs
         test_mode: Literal["test", "val", "inference"] = "val",
         world_size: int = 1,
         local_rank: int = 0,
+        test_tuning: bool = False,
         **kwargs,  # pylint: disable=unused-argument
     ):
         self.dataset_type: Type[TDataset] = kwargs.get("_dataset_type", TDataset.__default__)
@@ -410,6 +411,7 @@ class VanillaDataManager(DataManager, Generic[TDataset]):  # pylint: disable=abs
         self.sampler = None
         self.test_mode = test_mode
         self.test_split = "test" if test_mode in ["test", "inference"] else "val"
+        self.test_tuning = test_tuning
         self.dataparser_config = self.config.dataparser
         if self.config.data is not None:
             self.config.dataparser.data = Path(self.config.data)
@@ -417,7 +419,11 @@ class VanillaDataManager(DataManager, Generic[TDataset]):  # pylint: disable=abs
             self.config.data = self.config.dataparser.data
         self.dataparser = self.dataparser_config.setup()
         self.includes_time = self.dataparser.includes_time
-        self.train_dataparser_outputs = self.dataparser.get_dataparser_outputs(split="train")
+
+        if self.test_tuning:
+            self.train_dataparser_outputs = self.dataparser.get_dataparser_outputs(split=self.test_split)
+        else:
+            self.train_dataparser_outputs = self.dataparser.get_dataparser_outputs(split="train")
 
         self.train_dataset = self.create_train_dataset()
         self.eval_dataset = self.create_eval_dataset()

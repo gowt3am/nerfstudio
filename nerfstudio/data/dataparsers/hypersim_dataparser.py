@@ -102,6 +102,8 @@ class HyperSim(DataParser):
                       "semantic_filenames": self.all_semantic_names,
                       "semantic_instance_filenames": self.all_semantic_instance_names,
                       "entity_id_filenames": self.all_entity_id_names,
+                      "reconstructed_image_filenames": self.all_reconstructed_image_names,
+                      "reconstruction_mask_filenames": self.all_reconstruction_mask_names,
                       "m_per_asset_unit": self.config.m_per_asset_unit,
                       "H_orig": self.config.height, "W_orig": self.config.width,
                       "scene_boundary": self.scene_boundary,
@@ -200,6 +202,10 @@ class HyperSim(DataParser):
             '_geometry_hdf5/frame.' + x.split('.')[-1] + '.semantic_instance.hdf5' for x in self.img_ids]
         self.all_entity_id_names = [str(self.config.data) + '/images/scene_' + x.split('.')[0] +
             '_geometry_hdf5/frame.' + x.split('.')[-1] + '.render_entity_id.hdf5' for x in self.img_ids]
+        self.all_reconstructed_image_names = [str(self.config.data) + '/images/rendered_cam_' +
+            x.split('.')[0] + '/frame.' + x.split('.')[-1] + '.color.png' for x in self.img_ids]
+        self.all_reconstruction_mask_names = [str(self.config.data) + '/images/rendered_cam_' +
+            x.split('.')[0] + '/frame.' + x.split('.')[-1] + '.valid.png' for x in self.img_ids]
         print(f'Extracted the {split} which contains {len(self.img_ids)} images')
 
     def _create_cam_model(self):

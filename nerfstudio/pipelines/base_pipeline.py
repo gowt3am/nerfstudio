@@ -209,6 +209,8 @@ class VanillaPipelineConfig(cfg.InstantiateConfig):
     """specifies the datamanager config"""
     model: ModelConfig = ModelConfig()
     """specifies the model config"""
+    test_tuning: bool = False
+    """Whether we are tuning a model on reconstructed test data"""
 
 
 class VanillaPipeline(Pipeline):
@@ -241,7 +243,7 @@ class VanillaPipeline(Pipeline):
         self.config = config
         self.test_mode = test_mode
         self.datamanager: VanillaDataManager = config.datamanager.setup(
-            device=device, test_mode=test_mode, world_size=world_size, local_rank=local_rank
+            device=device, test_mode=test_mode, world_size=world_size, local_rank=local_rank, test_tuning=self.config.test_tuning
         )
         self.datamanager.to(device)
         # TODO(ethan): get rid of scene_bounds from the model
@@ -251,6 +253,8 @@ class VanillaPipeline(Pipeline):
             scene_box=self.datamanager.train_dataset.scene_box,
             num_train_data=len(self.datamanager.train_dataset),
             metadata=self.datamanager.train_dataset.metadata,
+            test_tuning=self.config.test_tuning,
+            num_test_data=len(self.datamanager.eval_dataset) if self.datamanager.eval_dataset is not None else 0
         )
         self.model.to(device)
 
