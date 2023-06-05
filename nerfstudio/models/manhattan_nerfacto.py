@@ -45,7 +45,6 @@ from nerfstudio.fields.density_fields import HashMLPDensityField
 from nerfstudio.fields.nerfacto_field import TCNNNerfactoField
 from nerfstudio.model_components.losses import (
     MSELossFiltered,
-    GainCompensatedMSE,
     OpacityLoss,
     ManhattanNormalLoss,
     NormalSupervisionLoss,
@@ -263,7 +262,6 @@ class ManhattanNerfactoModel(Model):
 
         # losses
         self.rgb_loss = MSELossFiltered()
-        self.gain_compensated_rgb_loss = GainCompensatedMSE()
         self.opacity_loss = OpacityLoss()
         self.manhattan_normal_loss = ManhattanNormalLoss(
             min_cluster_similarity=self.config.min_cluster_similarity,
@@ -296,8 +294,7 @@ class ManhattanNerfactoModel(Model):
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
         param_groups = {}
         param_groups["proposal_networks"] = list(self.proposal_networks.parameters())
-        param_groups["fields"] = list(self.field.parameters())
-        param_groups["gain_compensation"] = [self.alpha, self.beta]
+        param_groups["fields"] = list(self.field.parameters()) + [self.alpha, self.beta]
         return param_groups
 
     def get_training_callbacks(
@@ -391,9 +388,17 @@ class ManhattanNerfactoModel(Model):
 
     def get_metrics_dict(self, outputs, batch):
         metrics_dict = {}
-        image = batch["image"].to(self.device)
-        metrics_dict["psnr"] = self.psnr_rgb(outputs["rgb"], image)
+        if self.test_tuning and self.training:
+            # indices = batch["indices"].to(self.device)
+            # reconstructed = batch["reconstructed"].to(self.device)
+            # a = self.alpha[indices[:, 0]].unsqueeze(1)
+            # b = self.beta[indices[:, 0]].unsqueeze(1)
+            # tgt = a * reconstructed + b
+            tgt = batch["reconstructed"].to(self.device)
+        else:
+            tgt = batch["image"].to(self.device)
 
+        metrics_dict["psnr"] = self.psnr_rgb(outputs["rgb"], tgt)
         if self.config.calc_depth_metrics:
             metrics_dict["rmse_depth"] = self.rmse_depth(outputs["depth"].squeeze(), batch["depth"].to(self.device))
             metrics_dict["abs_depth"] = self.abs_depth(outputs["depth"].squeeze(), batch["depth"].to(self.device))
@@ -409,12 +414,19 @@ class ManhattanNerfactoModel(Model):
 
     def get_loss_dict(self, outputs, batch, step, metrics_dict=None):
         loss_dict = {}
-        if self.test_tuning:
-            loss_dict["rgb"] = self.rgb_loss(batch["reconstructed"].to(self.device), outputs["rgb"],
-                                             batch["indices"].to(self.device), self.alpha, self.beta)
+        if self.test_tuning and self.training:
+            # indices = batch["indices"].to(self.device)
+            # reconstructed = batch["reconstructed"].to(self.device)
+            # a = self.alpha[indices[:, 0]].unsqueeze(1)
+            # b = self.beta[indices[:, 0]].unsqueeze(1)
+            # tgt = a * reconstructed + b
+            # # Adding a normalizing loss term to keep alpha and beta close to 1, 0
+            # loss_dict["alpha_beta"] = 0.01 * (torch.mean(torch.abs(a - 1.0)) + torch.mean(torch.abs(b)))
+            tgt = batch["reconstructed"].to(self.device)
         else:
-            loss_dict["rgb"] = self.rgb_loss(batch["image"].to(self.device), outputs["rgb"])
-        
+            tgt = batch["image"].to(self.device)
+
+        loss_dict["rgb"] = self.rgb_loss(tgt, outputs["rgb"])
         if self.config.opacity_penalty_weight > 0:
             loss_dict["opacity"] = self.config.opacity_penalty_weight * self.opacity_loss(outputs["accumulation"])
         

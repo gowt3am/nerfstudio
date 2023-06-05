@@ -45,6 +45,7 @@ class HyperSimDataset(InputDataset):
         self.labels = labels
         self.test_tuning = test_tuning
         if self.test_tuning:
+            print("Test Tuning is enabled, so loading the reconstructed images and their masks")
             self.labels = labels + ["reconstructed", "mask"]
         self.img_filenames = dataparser_outputs.image_filenames
         self.depth_filenames = self.metadata["depth_filenames"]
@@ -209,17 +210,17 @@ class HyperSimDataset(InputDataset):
                     content[np.logical_not(wall_floor_mask)] = 3
 
             elif label == "reconstructed":
-                content = np.array(Image.open(self.reconstructed_image_filenames[image_idx], 'r')).astype('float32')
+                content = np.array(Image.open(self.reconstructed_image_filenames[image_idx], 'r')).astype('float32') / 255.0
                 if content is None:
                     content = np.zeros((self.H_orig, self.W_orig, 3), dtype=np.float32)
                 zero_vect = np.zeros(3, dtype=content.dtype)
                 content[np.isnan(np.abs(content).sum(axis=-1))] = zero_vect
 
             elif label == "mask":
-                content = np.array(Image.open(self.reconstructed_mask_filenames[image_idx], 'r')).astype('float32')
+                content = np.array(Image.open(self.reconstructed_mask_filenames[image_idx], 'r')).astype('float32') / 255.0
                 if content is None:
-                    content = np.ones((self.H_orig, self.W_orig), dtype=np.float32)*255.0
-                content[np.isnan(np.abs(content).sum(axis=-1))] = 255.0
+                    content = np.ones((self.H_orig, self.W_orig), dtype=np.float32)
+                content[np.isnan(np.abs(content).sum(axis=-1))] = 1.0
             else:
                 raise NotImplementedError(f"Label {label} is not implemented")
             
