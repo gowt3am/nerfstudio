@@ -399,10 +399,10 @@ class ManhattanNerfactoModel(Model):
             tgt = batch["image"].to(self.device)
 
         metrics_dict["psnr"] = self.psnr_rgb(outputs["rgb"], tgt)
-        if self.config.calc_depth_metrics:
+        if self.config.calc_depth_metrics and "depth" in outputs and "depth" in batch:
             metrics_dict["rmse_depth"] = self.rmse_depth(outputs["depth"].squeeze(), batch["depth"].to(self.device))
             metrics_dict["abs_depth"] = self.abs_depth(outputs["depth"].squeeze(), batch["depth"].to(self.device))
-        if self.config.calc_normal_metrics and "normals" in outputs:
+        if self.config.calc_normal_metrics and "normals" in outputs and "normals" in batch:
             metrics_dict["angular_normal"] = self.angular_normal(outputs["normals"], batch["normals"].to(self.device))
             # metrics_dict.update(self.normal_supervision_loss(outputs["normals"][outputs["normal_valid_mask"]],
             #                                                  batch["normals"][outputs["normal_valid_mask"]].to(self.device), 4250))
@@ -430,10 +430,10 @@ class ManhattanNerfactoModel(Model):
         if self.config.opacity_penalty_weight > 0:
             loss_dict["opacity"] = self.config.opacity_penalty_weight * self.opacity_loss(outputs["accumulation"])
         
-        if self.use_manhattan_losses and "normals" in outputs:
+        if self.use_manhattan_losses and "normals" in outputs and "normals" in batch:
             loss_dict.update(self.manhattan_normal_loss(outputs["normals"][outputs["normal_valid_mask"]], step))
         
-        if self.use_normal_gt_losses and "normals" in outputs:
+        if self.use_normal_gt_losses and "normals" in outputs and "normals" in batch:
             loss_dict.update(self.normal_supervision_loss(outputs["normals"][outputs["normal_valid_mask"]],
                                                           batch["normals"][outputs["normal_valid_mask"]].to(self.device), step))
         
@@ -484,13 +484,13 @@ class ManhattanNerfactoModel(Model):
         # all of these metrics will be logged as scalars
         metrics_dict = {"psnr": float(psnr), "ssim": float(ssim), "lpips": float(lpips)}
 
-        if self.config.calc_depth_metrics:
+        if self.config.calc_depth_metrics and "depth" in outputs and "depth" in batch:
             tgt_depth = batch["depth"].to(self.device)
             pred_depth = outputs["depth"].squeeze()
             metrics_dict.update({"rmse_depth" : self.rmse_depth(tgt_depth, pred_depth),
                                  "abs_depth" : self.abs_depth(tgt_depth, pred_depth)})
         
-        if self.config.calc_normal_metrics and "normals" in outputs:
+        if self.config.calc_normal_metrics and "normals" in outputs and "normals" in batch:
             tgt_normals = batch["normals"].to(self.device)
             pred_normals = outputs["normals"]
             metrics_dict.update({"angular_normal" : self.angular_normal(tgt_normals, pred_normals)})

@@ -77,13 +77,38 @@ class HyperSimDataParserConfig(DataParserConfig):
 class HyperSim(DataParser):
     """HyperSim DatasetParser"""
     config: HyperSimDataParserConfig
-    def _generate_dataparser_outputs(self, split="train"):
+    def _generate_dataparser_outputs(self, split="train", test_tuning=False, random_views=False):
+        self.test_tuning = test_tuning
+        self.use_random_views = random_views
         self._load_m_per_asset_unit()
         self._load_scene_metadata()
         self._load_image_ids()
         self._generate_data_splits(split)
         self._create_cam_model()
         self._rescale_scene_with_boundary()
+
+        if self.test_tuning:
+            # Reconstructed images and masks are numbered from 0 to len(val_data), so different naming convention
+            img_ids = [x.split('.')[0] + '.{:04d}'.format(y) for (x, y) in zip(self.img_ids, range(len(self.img_ids)))]
+            self.all_reconstructed_image_names = [str(self.config.data) + '/images/no_filt_rendered_' +
+                x.split('.')[0] + '/frame.' + x.split('.')[-1] + '.color.png' for x in img_ids]
+            self.all_reconstructed_mask_names = [str(self.config.data) + '/images/no_filt_rendered_' +
+                x.split('.')[0] + '/frame.' + x.split('.')[-1] + '.valid.png' for x in img_ids]
+            self.all_reconstructed_poses = self.poses.copy()
+        if self.use_random_views:
+            self.num_random_views = len(list((self.config.data / 'images' / 'random_renders').rglob("*.png"))) // 2
+            img_ids = ['{:04d}'.format(x) for x in range(self.num_random_views)]
+            self.all_reconstructed_image_names = [None]*len(self) + [str(self.config.data) + '/images/random_renders/frame.'
+                                                  + x + '.color.png' for x in img_ids]
+            self.all_reconstructed_mask_names = [None]*len(self) + [str(self.config.data) + '/images/random_renders/frame.' 
+                                                  + x + '.valid.png' for x in img_ids]
+            self.all_reconstructed_poses = torch.from_numpy(np.load(self.config.data / 'images' / 'random_renders' / 'poses.npy')).float()
+            self.all_reconstructed_poses = torch.cat((self.poses, self.all_reconstructed_poses), dim=0)
+            self.poses = self.all_reconstructed_poses.copy()
+        else:
+            self.all_reconstructed_image_names = None
+            self.all_reconstructed_mask_names = None
+            self.all_reconstructed_poses = None
 
         cameras = Cameras(fx=self.fx, fy=self.fy, cx=self.cx, cy=self.cy,
                           height=self.config.height, width=self.config.width,
@@ -103,7 +128,8 @@ class HyperSim(DataParser):
                       "semantic_instance_filenames": self.all_semantic_instance_names,
                       "entity_id_filenames": self.all_entity_id_names,
                       "reconstructed_image_filenames": self.all_reconstructed_image_names,
-                      "reconstructed_mask_filenames": self.all_reconstruction_mask_names,
+                      "reconstructed_mask_filenames": self.all_reconstructed_mask_names,
+                      "reconstructed_poses": self.all_reconstructed_poses,
                       "m_per_asset_unit": self.config.m_per_asset_unit,
                       "H_orig": self.config.height, "W_orig": self.config.width,
                       "scene_boundary": self.scene_boundary,
@@ -203,13 +229,6 @@ class HyperSim(DataParser):
         self.all_entity_id_names = [str(self.config.data) + '/images/scene_' + x.split('.')[0] +
             '_geometry_hdf5/frame.' + x.split('.')[-1] + '.render_entity_id.hdf5' for x in self.img_ids]
         print(f'Extracted the {split} which contains {len(self.img_ids)} images')
-
-        # Reconstructed images and masks are numbered from 0 to len(val_data), so different naming convention
-        img_ids = [x.split('.')[0] + '.{:04d}'.format(y) for (x, y) in zip(self.img_ids, range(len(self.img_ids)))]
-        self.all_reconstructed_image_names = [str(self.config.data) + '/images/no_filt_rendered_' +
-            x.split('.')[0] + '/frame.' + x.split('.')[-1] + '.color.png' for x in img_ids]
-        self.all_reconstruction_mask_names = [str(self.config.data) + '/images/no_filt_rendered_' +
-            x.split('.')[0] + '/frame.' + x.split('.')[-1] + '.valid.png' for x in img_ids]
         
     def _create_cam_model(self):
         """Load camera intrinsics and extrinsics"""

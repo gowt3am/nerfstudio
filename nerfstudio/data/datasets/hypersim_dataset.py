@@ -40,21 +40,29 @@ class HyperSimDataset(InputDataset):
         scale_factor: The downscaling factor for the dataparser outputs.
     """
     def __init__(self, dataparser_outputs: DataparserOutputs, scale_factor: float = 1.0,
-                 labels: List[str] = [], test_tuning: bool = False):
+                 labels: List[str] = [], test_tuning: bool = False, random_views: bool = False):
         super().__init__(dataparser_outputs, scale_factor)
         self.labels = labels
         self.test_tuning = test_tuning
+        self.random_views = random_views
+        
+        self.reconstructed_image_filenames = self.metadata["reconstructed_image_filenames"]
+        self.reconstructed_mask_filenames = self.metadata["reconstructed_mask_filenames"]
+        self.reconstructed_poses = self.metadata["reconstructed_poses"]
         if self.test_tuning:
             print("Test Tuning is enabled, so loading the reconstructed images and their masks")
             self.labels = labels + ["reconstructed", "mask"]
+        if self.random_views:
+            self.num_random_views = len(self.reconstructed_image_filenames)
+            print(f"Random Views is enabled, so using {self.num_random_views} additional views for training")
+            self.labels = labels + ["mask"]
+
         self.img_filenames = dataparser_outputs.image_filenames
         self.depth_filenames = self.metadata["depth_filenames"]
         self.normal_filenames = self.metadata["normal_filenames"]
         self.semantic_filenames = self.metadata["semantic_filenames"]
         self.semantic_instance_filenames = self.metadata["semantic_instance_filenames"]
         self.entity_id_filenames = self.metadata["entity_id_filenames"]
-        self.reconstructed_image_filenames = self.metadata["reconstructed_image_filenames"]
-        self.reconstructed_mask_filenames = self.metadata["reconstructed_mask_filenames"]
         self.m_per_asset_unit = self.metadata["m_per_asset_unit"]
         self.H_orig = self.metadata["H_orig"]
         self.W_orig = self.metadata["W_orig"]
@@ -217,7 +225,11 @@ class HyperSimDataset(InputDataset):
                 content[np.isnan(np.abs(content).sum(axis=-1))] = zero_vect
 
             elif label == "mask":
-                content = np.array(Image.open(self.reconstructed_mask_filenames[image_idx], 'r')).astype('float32') / 255.0
+                if self.random_views:
+                    content = None
+                else:
+                    content = np.array(Image.open(self.reconstructed_mask_filenames[image_idx], 'r')).astype('float32') / 255.0
+
                 if content is None:
                     content = np.ones((self.H_orig, self.W_orig), dtype=np.float32)
                 content[np.isnan(np.abs(content).sum(axis=-1))] = 1.0
@@ -252,3 +264,31 @@ class HyperSimDataset(InputDataset):
             self.all_depths = all_depths
         # Scale depth with respect to scene scaling factor (calculated in dataparser)
         self.all_depths *= self._dataparser_outputs.dataparser_scale
+
+    def __get_rand_item__(self, image_idx: int) -> Dict:
+        data = {"image_idx": image_idx}
+        data["pose"] = self.reconstructed_poses[image_idx]
+        
+        image = np.array(Image.open(self.reconstructed_image_filenames[image_idx], 'r')).astype('float32') / 255.0
+        if image is None:
+            image = np.zeros((self.H_orig, self.W_orig, 3), dtype=np.float32)
+        zero_vect = np.zeros(3, dtype=image.dtype)
+        image[np.isnan(np.abs(image).sum(axis=-1))] = zero_vect
+        data["image"] = self._downscale_content(torch.from_numpy(image), "image")
+        
+        mask = np.array(Image.open(self.reconstructed_mask_filenames[image_idx], 'r')).astype('float32') / 255.0
+        if mask is None:
+            mask = np.ones((self.H_orig, self.W_orig), dtype=np.float32)
+        mask[np.isnan(np.abs(mask).sum(axis=-1))] = 1.0
+        data["mask"] = self._downscale_content(torch.from_numpy(mask), "mask")
+
+        # if "depth" in self.labels:
+        #     depth = np.zeros((self.H_orig, self.W_orig), dtype=np.float32)
+        #     depth[np.isnan(depth)] = 0.0
+        #     data["depth"] = self._downscale_content(torch.from_numpy(depth), "depth")
+        # if "normals" in self.labels:
+        #     normals = np.zeros((self.H_orig, self.W_orig, 3), dtype=np.float32)
+        #     zero_vect = np.zeros(3, dtype=normals.dtype)
+        #     normals[np.isnan(np.abs(normals).sum(axis=-1))] = zero_vect
+        #     data["normals"] = self._downscale_content(torch.from_numpy(normals), "normals")
+        return data

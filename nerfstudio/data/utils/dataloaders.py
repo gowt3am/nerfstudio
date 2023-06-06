@@ -137,6 +137,97 @@ class CacheDataloader(DataLoader):
                 self.num_repeated += 1
             yield collated_batch
 
+class MixedDataloader(DataLoader):
+    """Similar to CacheDataloader, but allows for a mix of cached real images, and lazily 
+    loads randomly generated images.
+
+    Args:
+        dataset: Dataset to sample from.
+        num_random_images_to_sample_from: How many random views to sample rays for each batch.
+        device: Device to perform computation.
+        collate_fn: The function we will use to collate our training data
+    """
+    def __init__(
+        self,
+        dataset: Dataset,
+        num_random_images_to_sample_from: int = 50,
+        device: Union[torch.device, str] = "cpu",
+        collate_fn=nerfstudio_collate,
+        **kwargs,
+    ):
+        self.dataset = dataset
+        super().__init__(dataset=dataset, **kwargs)  # This will set self.dataset
+        self.num_real_images_to_sample_from = len(self.dataset)
+        self.num_random_images_to_sample_from = num_random_images_to_sample_from
+        self.device = device
+        self.collate_fn = collate_fn
+        self.num_workers = kwargs.get("num_workers", 0)
+
+        CONSOLE.print(f"Caching all {len(self.dataset)} real images.")
+        if len(self.dataset) > 500:
+            CONSOLE.print(
+                "[bold yellow]Warning: If you run out of memory, try reducing the number of images to sample from."
+            )
+        self.real_batch_list = self._get_real_batch_list()
+
+    def __getitem__(self, idx):
+        return self.dataset.__getitem__(idx)
+    
+    def _get_real_batch_list(self):
+        """Returns the full list of real batches from the dataset attribute."""
+
+        indices = range(len(self.dataset))
+        batch_list = []
+        results = []
+
+        num_threads = int(self.num_workers) * 4
+        num_threads = min(num_threads, multiprocessing.cpu_count() - 1)
+        num_threads = max(num_threads, 1)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+            for idx in indices:
+                res = executor.submit(self.dataset.__getitem__, idx)
+                results.append(res)
+
+            for res in track(results, description="Loading data batch", transient=True):
+                batch_list.append(res.result())
+
+        return batch_list
+
+    def _get_random_batch_list(self):
+        """Returns a list of batches from the dataset attribute."""
+
+        indices = random.sample(range(len(self.dataset), self.dataset.num_random_views + len(self.dataset)),
+                                k=self.num_random_images_to_sample_from)
+        batch_list = []
+        results = []
+
+        num_threads = int(self.num_workers) * 4
+        num_threads = min(num_threads, multiprocessing.cpu_count() - 1)
+        num_threads = max(num_threads, 1)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+            for idx in indices:
+                res = executor.submit(self.dataset.__get_rand_item__, idx)
+                results.append(res)
+
+            for res in track(results, description="Loading data batch", transient=True):
+                batch_list.append(res.result())
+
+        return batch_list
+
+    def _get_collated_batch(self):
+        """Returns a collated batch."""
+        real_batch_list = self.real_batch_list
+        random_batch_list = self._get_random_batch_list()
+        batch_list = real_batch_list + random_batch_list
+        collated_batch = self.collate_fn(batch_list)
+        collated_batch = get_dict_to_torch(collated_batch, device=self.device, exclude=["image"])
+        return collated_batch
+
+    def __iter__(self):
+        while True:
+            yield self._get_collated_batch()
 
 class EvalDataloader(DataLoader):
     """Evaluation dataloader base class

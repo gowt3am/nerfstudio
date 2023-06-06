@@ -66,6 +66,7 @@ from nerfstudio.data.pixel_samplers import (
 )
 from nerfstudio.data.utils.dataloaders import (
     CacheDataloader,
+    MixedDataloader,
     FixedIndicesEvalDataloader,
     RandIndicesEvalDataloader,
 )
@@ -400,7 +401,6 @@ class VanillaDataManager(DataManager, Generic[TDataset]):  # pylint: disable=abs
         test_mode: Literal["test", "val", "inference"] = "val",
         world_size: int = 1,
         local_rank: int = 0,
-        test_tuning: bool = False,
         **kwargs,  # pylint: disable=unused-argument
     ):
         self.dataset_type: Type[TDataset] = kwargs.get("_dataset_type", TDataset.__default__)
@@ -411,7 +411,8 @@ class VanillaDataManager(DataManager, Generic[TDataset]):  # pylint: disable=abs
         self.sampler = None
         self.test_mode = test_mode
         self.test_split = "test" if test_mode in ["test", "inference"] else "val"
-        self.test_tuning = test_tuning
+        self.test_tuning = kwargs["test_tuning"]
+        self.random_views = kwargs["random_views"]
         self.dataparser_config = self.config.dataparser
         if self.config.data is not None:
             self.config.dataparser.data = Path(self.config.data)
@@ -421,7 +422,9 @@ class VanillaDataManager(DataManager, Generic[TDataset]):  # pylint: disable=abs
         self.includes_time = self.dataparser.includes_time
 
         if self.test_tuning:
-            self.train_dataparser_outputs = self.dataparser.get_dataparser_outputs(split=self.test_split)
+            self.train_dataparser_outputs = self.dataparser.get_dataparser_outputs(split=self.test_split, test_tuning=True)
+        elif self.random_views:
+            self.train_dataparser_outputs = self.dataparser.get_dataparser_outputs(split="train", random_views=True)
         else:
             self.train_dataparser_outputs = self.dataparser.get_dataparser_outputs(split="train")
 
@@ -480,15 +483,25 @@ class VanillaDataManager(DataManager, Generic[TDataset]):  # pylint: disable=abs
         """Sets up the data loaders for training"""
         assert self.train_dataset is not None
         CONSOLE.print("Setting up training dataset...")
-        self.train_image_dataloader = CacheDataloader(
-            self.train_dataset,
-            num_images_to_sample_from=self.config.train_num_images_to_sample_from,
-            num_times_to_repeat_images=self.config.train_num_times_to_repeat_images,
-            device=self.device,
-            num_workers=self.world_size * 4,
-            pin_memory=True,
-            collate_fn=self.config.collate_fn,
-        )
+        if self.random_views:
+            self.train_image_dataloader = MixedDataloader(
+                self.train_dataset,
+                num_random_views=50,
+                device=self.device,
+                num_workers=self.world_size * 4,
+                pin_memory=True,
+                collate_fn=self.config.collate_fn
+            )
+        else:
+            self.train_image_dataloader = CacheDataloader(
+                self.train_dataset,
+                num_images_to_sample_from=self.config.train_num_images_to_sample_from,
+                num_times_to_repeat_images=self.config.train_num_times_to_repeat_images,
+                device=self.device,
+                num_workers=self.world_size * 4,
+                pin_memory=True,
+                collate_fn=self.config.collate_fn
+            )
         self.iter_train_image_dataloader = iter(self.train_image_dataloader)
         self.train_pixel_sampler = self._get_pixel_sampler(self.train_dataset, self.config.train_num_rays_per_batch)
         self.train_camera_optimizer = self.config.camera_optimizer.setup(
