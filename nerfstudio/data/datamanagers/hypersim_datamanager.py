@@ -33,7 +33,7 @@ class HyperSimDataManagerConfig(VanillaDataManagerConfig):
     """A hypersim datamanager - required to use with .setup()"""
     _target: Type = field(default_factory=lambda: HyperSimDataManager)
     
-    labels: List[str] = field(default_factory=lambda: ["normals", "depth"])
+    labels: List[str] = field(default_factory=lambda: []) #field(default_factory=lambda: ["normals", "depth"])
     """Labels/Files to load"""
     ray_sampling_strategy: str = "triangle"
     """The ray sampling strategy to use. Options are "triangle" and "uniform"."""

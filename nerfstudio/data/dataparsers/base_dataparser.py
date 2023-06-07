@@ -150,7 +150,7 @@ class DataParser:
             DataparserOutputs containing data for the specified dataset and split
         """
 
-    def get_dataparser_outputs(self, split: str = "train") -> DataparserOutputs:
+    def get_dataparser_outputs(self, split: str = "train", **kwargs) -> DataparserOutputs:
         """Returns the dataparser outputs for the given split.
 
         Args:
@@ -159,7 +159,7 @@ class DataParser:
         Returns:
             DataparserOutputs containing data for the specified dataset and split
         """
-        dataparser_outputs = self._generate_dataparser_outputs(split)
+        dataparser_outputs = self._generate_dataparser_outputs(split, **kwargs)
         return dataparser_outputs
 
 

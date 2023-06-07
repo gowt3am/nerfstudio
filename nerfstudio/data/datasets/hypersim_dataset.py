@@ -46,23 +46,24 @@ class HyperSimDataset(InputDataset):
         self.test_tuning = test_tuning
         self.random_views = random_views
         
-        self.reconstructed_image_filenames = self.metadata["reconstructed_image_filenames"]
-        self.reconstructed_mask_filenames = self.metadata["reconstructed_mask_filenames"]
-        self.reconstructed_poses = self.metadata["reconstructed_poses"]
-        if self.test_tuning:
-            print("Test Tuning is enabled, so loading the reconstructed images and their masks")
-            self.labels = labels + ["reconstructed", "mask"]
-        if self.random_views:
-            self.num_random_views = len(self.reconstructed_image_filenames)
-            print(f"Random Views is enabled, so using {self.num_random_views} additional views for training")
-            self.labels = labels + ["mask"]
-
         self.img_filenames = dataparser_outputs.image_filenames
         self.depth_filenames = self.metadata["depth_filenames"]
         self.normal_filenames = self.metadata["normal_filenames"]
         self.semantic_filenames = self.metadata["semantic_filenames"]
         self.semantic_instance_filenames = self.metadata["semantic_instance_filenames"]
         self.entity_id_filenames = self.metadata["entity_id_filenames"]
+        self.reconstructed_image_filenames = self.metadata["reconstructed_image_filenames"]
+        self.reconstructed_mask_filenames = self.metadata["reconstructed_mask_filenames"]
+        self.reconstructed_poses = self.metadata["reconstructed_poses"]
+
+        if self.test_tuning:
+            print("Test Tuning is enabled, so loading the reconstructed images and their masks")
+            self.labels = labels + ["reconstructed", "mask"]
+        if self.random_views:
+            self.num_random_views = len(self.reconstructed_image_filenames) - len(self.img_filenames)
+            print(f"Random Views is enabled, so using {self.num_random_views} additional views for training")
+            self.labels = labels + ["mask"]
+
         self.m_per_asset_unit = self.metadata["m_per_asset_unit"]
         self.H_orig = self.metadata["H_orig"]
         self.W_orig = self.metadata["W_orig"]

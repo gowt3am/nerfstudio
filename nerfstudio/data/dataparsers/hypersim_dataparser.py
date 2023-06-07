@@ -77,9 +77,9 @@ class HyperSimDataParserConfig(DataParserConfig):
 class HyperSim(DataParser):
     """HyperSim DatasetParser"""
     config: HyperSimDataParserConfig
-    def _generate_dataparser_outputs(self, split="train", test_tuning=False, random_views=False):
-        self.test_tuning = test_tuning
-        self.use_random_views = random_views
+    def _generate_dataparser_outputs(self, split="train", **kwargs):
+        self.test_tuning = kwargs["test_tuning"] if "test_tuning" in kwargs else False
+        self.use_random_views = kwargs["random_views"] if "random_views" in kwargs else False
         self._load_m_per_asset_unit()
         self._load_scene_metadata()
         self._load_image_ids()
@@ -98,13 +98,13 @@ class HyperSim(DataParser):
         if self.use_random_views:
             self.num_random_views = len(list((self.config.data / 'images' / 'random_renders').rglob("*.png"))) // 2
             img_ids = ['{:04d}'.format(x) for x in range(self.num_random_views)]
-            self.all_reconstructed_image_names = [None]*len(self) + [str(self.config.data) + '/images/random_renders/frame.'
+            self.all_reconstructed_image_names = [None]*len(self.all_image_names) + [str(self.config.data) + '/images/random_renders2/frame.'
                                                   + x + '.color.png' for x in img_ids]
-            self.all_reconstructed_mask_names = [None]*len(self) + [str(self.config.data) + '/images/random_renders/frame.' 
+            self.all_reconstructed_mask_names = [None]*len(self.all_image_names) + [str(self.config.data) + '/images/random_renders2/frame.' 
                                                   + x + '.valid.png' for x in img_ids]
-            self.all_reconstructed_poses = torch.from_numpy(np.load(self.config.data / 'images' / 'random_renders' / 'poses.npy')).float()
+            self.all_reconstructed_poses = torch.from_numpy(np.load(self.config.data / 'images' / 'random_renders2' / 'random_poses.npy')).float()
             self.all_reconstructed_poses = torch.cat((self.poses, self.all_reconstructed_poses), dim=0)
-            self.poses = self.all_reconstructed_poses.copy()
+            self.poses = self.all_reconstructed_poses.clone()
         else:
             self.all_reconstructed_image_names = None
             self.all_reconstructed_mask_names = None

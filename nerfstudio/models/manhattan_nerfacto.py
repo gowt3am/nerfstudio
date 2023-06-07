@@ -506,7 +506,10 @@ class ManhattanNerfactoModel(Model):
             images_dict[key] = prop_depth_i
 
         if "normals_vis" in outputs:
-            normal_gt = (batch["normals"].to(self.device) + 1.0) / 2.0
-            combined_normal = torch.cat([normal_gt, outputs["normals_vis"]], dim=1)
+            if "normals" in batch:
+                normal_gt = (batch["normals"].to(self.device) + 1.0) / 2.0
+                combined_normal = torch.cat([normal_gt, outputs["normals_vis"]], dim=1)
+            else:
+                combined_normal = outputs["normals_vis"]
             images_dict["normals"] = combined_normal
         return metrics_dict, images_dict

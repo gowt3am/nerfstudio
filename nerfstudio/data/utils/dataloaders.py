@@ -144,6 +144,7 @@ class MixedDataloader(DataLoader):
     Args:
         dataset: Dataset to sample from.
         num_random_images_to_sample_from: How many random views to sample rays for each batch.
+        num_times_to_repeat_batch: How often to collate new random batches
         device: Device to perform computation.
         collate_fn: The function we will use to collate our training data
     """
@@ -151,6 +152,7 @@ class MixedDataloader(DataLoader):
         self,
         dataset: Dataset,
         num_random_images_to_sample_from: int = 50,
+        num_times_to_repeat_batch: int = -1,
         device: Union[torch.device, str] = "cpu",
         collate_fn=nerfstudio_collate,
         **kwargs,
@@ -159,6 +161,8 @@ class MixedDataloader(DataLoader):
         super().__init__(dataset=dataset, **kwargs)  # This will set self.dataset
         self.num_real_images_to_sample_from = len(self.dataset)
         self.num_random_images_to_sample_from = num_random_images_to_sample_from
+        self.num_times_to_repeat_batch = num_times_to_repeat_batch
+        self.num_repeated = self.num_times_to_repeat_batch + 1
         self.device = device
         self.collate_fn = collate_fn
         self.num_workers = kwargs.get("num_workers", 0)
@@ -224,10 +228,19 @@ class MixedDataloader(DataLoader):
         collated_batch = self.collate_fn(batch_list)
         collated_batch = get_dict_to_torch(collated_batch, device=self.device, exclude=["image"])
         return collated_batch
-
+    
     def __iter__(self):
         while True:
-            yield self._get_collated_batch()
+            if self.num_repeated >= self.num_times_to_repeat_batch:
+                # trigger a reset
+                self.num_repeated = 0
+                collated_batch = self._get_collated_batch()
+                # possibly save a cached item
+                self.cached_collated_batch = collated_batch
+            else:
+                collated_batch = self.cached_collated_batch
+                self.num_repeated += 1
+            yield collated_batch
 
 class EvalDataloader(DataLoader):
     """Evaluation dataloader base class

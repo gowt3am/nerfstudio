@@ -486,7 +486,8 @@ class VanillaDataManager(DataManager, Generic[TDataset]):  # pylint: disable=abs
         if self.random_views:
             self.train_image_dataloader = MixedDataloader(
                 self.train_dataset,
-                num_random_views=50,
+                num_random_images_to_sample_from=50,
+                num_times_to_repeat_batch=self.config.train_num_times_to_repeat_images,
                 device=self.device,
                 num_workers=self.world_size * 4,
                 pin_memory=True,
