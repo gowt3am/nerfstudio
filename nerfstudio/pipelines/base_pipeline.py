@@ -255,8 +255,9 @@ class VanillaPipeline(Pipeline):
             device=device, test_mode=test_mode, world_size=world_size, local_rank=local_rank,
             test_tuning=self.config.test_tuning, pregen_random_views=self.config.pregen_random_views,
             on_the_fly_random_views=self.config.on_the_fly_random_views,
-            num_total_random_poses=self.config.num_random_views*max_num_iterations,
-            num_random_views_per_batch=self.config.num_random_views
+            num_total_random_poses=self.config.num_random_views*max_num_iterations//self.config.new_views_every_iters,
+            num_random_views_per_batch=self.config.num_random_views,
+            new_views_every_iters=self.config.new_views_every_iters
         )
         self.datamanager.to(device)
         # TODO(ethan): get rid of scene_bounds from the model

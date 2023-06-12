@@ -416,6 +416,8 @@ class VanillaDataManager(DataManager, Generic[TDataset]):  # pylint: disable=abs
         self.on_the_fly_random_views = kwargs["on_the_fly_random_views"]
         self.num_total_random_poses = kwargs["num_total_random_poses"]
         self.num_random_views_per_batch = kwargs["num_random_views_per_batch"]
+        self.config.train_num_times_to_repeat_images = kwargs.get("new_views_every_iters",
+                                            self.config.train_num_times_to_repeat_images)
 
         self.dataparser_config = self.config.dataparser
         if self.config.data is not None:

@@ -307,7 +307,10 @@ class ManhattanNerfactoModel(Model):
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
         param_groups = {}
         param_groups["proposal_networks"] = list(self.proposal_networks.parameters())
-        param_groups["fields"] = list(self.field.parameters()) + [self.alpha, self.beta]
+        if self.config.use_affine_illumination_modeling:
+            param_groups["fields"] = list(self.field.parameters()) + [self.alpha, self.beta]
+        else:
+            param_groups["fields"] = list(self.field.parameters())
         return param_groups
 
     def get_training_callbacks(
@@ -405,19 +408,19 @@ class ManhattanNerfactoModel(Model):
             if self.test_tuning or self.pregen_random_views:
                 if self.config.use_affine_illumination_modeling:
                     indices = batch["indices"].to(self.device)
-                    reconstructed = batch["pregenerated"].to(self.device)
                     a = self.alpha[indices[:, 0]].unsqueeze(1)
                     b = self.beta[indices[:, 0]].unsqueeze(1)
-                    tgt = a * reconstructed + b
+                    tgt = a * batch["pregenerated"].to(self.device) + b
                 else:
                     tgt = batch["pregenerated"].to(self.device)
             elif self.on_the_fly_random_views:
                 if self.config.use_affine_illumination_modeling:
-                    indices = batch["indices"].to(self.device)
-                    reconstructed = batch["image"].to(self.device)
-                    a = self.alpha[self.rand_indices_dict[indices[:, 0]]].unsqueeze(1)
-                    b = self.beta[self.rand_indices_dict[indices[:, 0]]].unsqueeze(1)
-                    tgt = a * reconstructed + b
+                    indices = [self.rand_indices_dict[x] for x in batch["indices"][:, 0].cpu().numpy()]
+                    a = [self.alpha[x] if x != -1 else 1.0 for x in indices]
+                    b = [self.beta[x] if x != -1 else 0.0 for x in indices]
+                    a = torch.tensor(a).float().unsqueeze(1).to(self.device)
+                    b = torch.tensor(b).float().unsqueeze(1).to(self.device)
+                    tgt = a * batch["image"].to(self.device) + b
                 else:
                     tgt = batch["image"].to(self.device)
             else:
@@ -445,22 +448,22 @@ class ManhattanNerfactoModel(Model):
             if self.test_tuning or self.pregen_random_views:
                 if self.config.use_affine_illumination_modeling:
                     indices = batch["indices"].to(self.device)
-                    reconstructed = batch["pregenerated"].to(self.device)
                     a = self.alpha[indices[:, 0]].unsqueeze(1)
                     b = self.beta[indices[:, 0]].unsqueeze(1)
-                    tgt = a * reconstructed + b
-                    # # Adding a normalizing loss term to keep alpha and beta close to 1, 0
+                    tgt = a * batch["pregenerated"].to(self.device) + b
+                    # Adding a normalizing loss term to keep alpha and beta close to 1, 0
                     loss_dict["alpha_beta"] = 0.01 * (torch.mean(torch.abs(a - 1.0)) + torch.mean(torch.abs(b)))
                 else:
                     tgt = batch["pregenerated"].to(self.device)
             elif self.on_the_fly_random_views:
                 if self.config.use_affine_illumination_modeling:
-                    indices = batch["indices"].to(self.device)
-                    reconstructed = batch["image"].to(self.device)
-                    a = self.alpha[self.rand_indices_dict[indices[:, 0]]].unsqueeze(1)
-                    b = self.beta[self.rand_indices_dict[indices[:, 0]]].unsqueeze(1)
-                    tgt = a * reconstructed + b
-                    # # Adding a normalizing loss term to keep alpha and beta close to 1, 0
+                    indices = [self.rand_indices_dict[x] for x in batch["indices"][:, 0].cpu().numpy()]
+                    a = [self.alpha[x] if x != -1 else 1.0 for x in indices]
+                    b = [self.beta[x] if x != -1 else 0.0 for x in indices]
+                    a = torch.tensor(a).float().unsqueeze(1).to(self.device)
+                    b = torch.tensor(b).float().unsqueeze(1).to(self.device)
+                    tgt = a * batch["image"].to(self.device) + b
+                    # Adding a normalizing loss term to keep alpha and beta close to 1, 0
                     loss_dict["alpha_beta"] = 0.01 * (torch.mean(torch.abs(a - 1.0)) + torch.mean(torch.abs(b)))
                 else:
                     tgt = batch["image"].to(self.device)
@@ -557,7 +560,8 @@ class ManhattanNerfactoModel(Model):
             images_dict["normals"] = combined_normal
         return metrics_dict, images_dict
 
-    def reset_illumination_parameters(self, rand_indices) -> None:
+    def reset_illumination_parameters(self, rand_indices_dict) -> None:
+        self.rand_indices_dict = rand_indices_dict
         if self.config.use_affine_illumination_modeling:
             with torch.no_grad():
                 for name, param in self.named_parameters():
@@ -565,8 +569,3 @@ class ManhattanNerfactoModel(Model):
                         param.copy_(torch.ones(self.num_random_views))
                     elif 'beta' in name:
                         param.copy_(torch.zeros(self.num_random_views))
-
-            # Create a mapping between rand_indices and [0, 49] for alpha and beta
-            self.rand_indices_dict = {}
-            for illum_idx, view_idx in enumerate(rand_indices):
-                self.rand_indices_dict[view_idx] = illum_idx

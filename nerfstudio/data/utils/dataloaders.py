@@ -153,6 +153,8 @@ class MixedDataloader(DataLoader):
         dataset: Dataset,
         num_random_images_to_sample_from: int = 50,
         num_times_to_repeat_batch: int = -1,
+        pregen_random_views: bool = False,
+        on_the_fly_random_views: bool = False,
         device: Union[torch.device, str] = "cpu",
         collate_fn=nerfstudio_collate,
         **kwargs,
@@ -166,8 +168,8 @@ class MixedDataloader(DataLoader):
         self.device = device
         self.collate_fn = collate_fn
         self.num_workers = kwargs.get("num_workers", 0)
-        self.pregen_random_views = kwargs.get("pregen_random_views", False)
-        self.on_the_fly_random_views = kwargs.get("on_the_fly_random_views", False)
+        self.pregen_random_views = pregen_random_views
+        self.on_the_fly_random_views = on_the_fly_random_views
 
         CONSOLE.print(f"Caching all {len(self.dataset)} real images.")
         if len(self.dataset) > 500:

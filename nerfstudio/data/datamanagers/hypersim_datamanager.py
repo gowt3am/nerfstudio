@@ -17,10 +17,9 @@ HyperSim datamanager.
 """
 
 from dataclasses import dataclass, field
-from typing import Type, List, Any, Union, Literal
+from typing import Type, List, Any, Union, Literal, Dict
 
 import torch
-from torchtyping import TensorType
 from nerfstudio.data.datamanagers.base_datamanager import (
     VanillaDataManager,
     VanillaDataManagerConfig,
@@ -89,7 +88,7 @@ class HyperSimDataManager(VanillaDataManager):  # pylint: disable=abstract-metho
             labels=self.config.labels, test_tuning=False, pregen_random_views=False,
             on_the_fly_random_views=False)
 
-    def generate_random_views(self, num_views: int) -> TensorType:
+    def generate_random_views(self, num_views: int) -> Dict:
         """Generate random views for training.
         Args:
             num_views: number of random views to generate
