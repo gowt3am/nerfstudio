@@ -52,8 +52,9 @@ class DynamicBatchPipeline(VanillaPipeline):
         test_mode: Literal["test", "val", "inference"] = "val",
         world_size: int = 1,
         local_rank: int = 0,
+        max_num_iterations: int = 1000000
     ):
-        super().__init__(config, device, test_mode, world_size, local_rank)
+        super().__init__(config, device, test_mode, world_size, local_rank, max_num_iterations)
         assert isinstance(
             self.datamanager, VanillaDataManager
         ), "DynamicBatchPipeline only works with VanillaDataManager."

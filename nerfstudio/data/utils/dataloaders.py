@@ -166,6 +166,8 @@ class MixedDataloader(DataLoader):
         self.device = device
         self.collate_fn = collate_fn
         self.num_workers = kwargs.get("num_workers", 0)
+        self.pregen_random_views = kwargs.get("pregen_random_views", False)
+        self.on_the_fly_random_views = kwargs.get("on_the_fly_random_views", False)
 
         CONSOLE.print(f"Caching all {len(self.dataset)} real images.")
         if len(self.dataset) > 500:
@@ -201,8 +203,11 @@ class MixedDataloader(DataLoader):
     def _get_random_batch_list(self):
         """Returns a list of batches from the dataset attribute."""
 
-        indices = random.sample(range(len(self.dataset), self.dataset.num_random_views + len(self.dataset)),
-                                k=self.num_random_images_to_sample_from)
+        if self.pregen_random_views:
+            indices = random.sample(range(len(self.dataset), self.dataset.num_random_views + len(self.dataset)),
+                                    k=self.num_random_images_to_sample_from)
+        elif self.on_the_fly_random_views:
+            indices = self.dataset.rand_indices
         batch_list = []
         results = []
 

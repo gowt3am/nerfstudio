@@ -76,9 +76,6 @@ class Model(nn.Module):
         self.scene_box = scene_box
         self.render_aabb = None  # the box that we want to render - should be a subset of scene_box
         self.num_train_data = num_train_data
-        self.test_tuning = kwargs["test_tuning"]
-        self.random_views = kwargs["random_views"]
-        self.num_test_data = kwargs["num_test_data"]
         self.kwargs = kwargs
         self.collider = None
 

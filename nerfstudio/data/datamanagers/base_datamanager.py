@@ -412,7 +412,11 @@ class VanillaDataManager(DataManager, Generic[TDataset]):  # pylint: disable=abs
         self.test_mode = test_mode
         self.test_split = "test" if test_mode in ["test", "inference"] else "val"
         self.test_tuning = kwargs["test_tuning"]
-        self.random_views = kwargs["random_views"]
+        self.pregen_random_views = kwargs["pregen_random_views"]
+        self.on_the_fly_random_views = kwargs["on_the_fly_random_views"]
+        self.num_total_random_poses = kwargs["num_total_random_poses"]
+        self.num_random_views_per_batch = kwargs["num_random_views_per_batch"]
+
         self.dataparser_config = self.config.dataparser
         if self.config.data is not None:
             self.config.dataparser.data = Path(self.config.data)
@@ -422,11 +426,18 @@ class VanillaDataManager(DataManager, Generic[TDataset]):  # pylint: disable=abs
         self.includes_time = self.dataparser.includes_time
 
         if self.test_tuning:
-            self.train_dataparser_outputs = self.dataparser.get_dataparser_outputs(split=self.test_split, test_tuning=True)
-        elif self.random_views:
-            self.train_dataparser_outputs = self.dataparser.get_dataparser_outputs(split="train", random_views=True)
+            self.train_dataparser_outputs = self.dataparser.get_dataparser_outputs(
+                                            split=self.test_split, test_tuning=True)
+        elif self.pregen_random_views:
+            self.train_dataparser_outputs = self.dataparser.get_dataparser_outputs(
+                                            split="train", pregen_random_views=True)
+        elif self.on_the_fly_random_views:
+            self.train_dataparser_outputs = self.dataparser.get_dataparser_outputs(
+                                            split="train", on_the_fly_random_views=True,
+                                            num_total_random_poses=self.num_total_random_poses)
         else:
-            self.train_dataparser_outputs = self.dataparser.get_dataparser_outputs(split="train")
+            self.train_dataparser_outputs = self.dataparser.get_dataparser_outputs(
+                                            split="train")
 
         self.train_dataset = self.create_train_dataset()
         self.eval_dataset = self.create_eval_dataset()
@@ -483,11 +494,13 @@ class VanillaDataManager(DataManager, Generic[TDataset]):  # pylint: disable=abs
         """Sets up the data loaders for training"""
         assert self.train_dataset is not None
         CONSOLE.print("Setting up training dataset...")
-        if self.random_views:
+        if self.pregen_random_views or self.on_the_fly_random_views:
             self.train_image_dataloader = MixedDataloader(
                 self.train_dataset,
-                num_random_images_to_sample_from=50,
+                num_random_images_to_sample_from=self.num_random_views_per_batch,
                 num_times_to_repeat_batch=self.config.train_num_times_to_repeat_images,
+                pregen_random_views=self.pregen_random_views,
+                on_the_fly_random_views=self.on_the_fly_random_views,
                 device=self.device,
                 num_workers=self.world_size * 4,
                 pin_memory=True,

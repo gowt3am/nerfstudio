@@ -13,10 +13,11 @@
 # limitations under the License.
 
 """Data parser for HyperSim dataset"""
-import math, json, random, h5py
+import math, json, random, h5py, faiss
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Type, List, Dict, Any
+from torchtyping import TensorType
 
 import numpy as np
 import pandas as pd
@@ -79,7 +80,9 @@ class HyperSim(DataParser):
     config: HyperSimDataParserConfig
     def _generate_dataparser_outputs(self, split="train", **kwargs):
         self.test_tuning = kwargs["test_tuning"] if "test_tuning" in kwargs else False
-        self.use_random_views = kwargs["random_views"] if "random_views" in kwargs else False
+        self.use_pregen_random_views = kwargs["pregen_random_views"] if "pregen_random_views" in kwargs else False
+        self.use_on_the_fly_random_views = kwargs["on_the_fly_random_views"] if "on_the_fly_random_views" in kwargs else False
+        self.num_total_random_poses = kwargs["num_total_random_poses"] if "num_total_random_poses" in kwargs else None
         self._load_m_per_asset_unit()
         self._load_scene_metadata()
         self._load_image_ids()
@@ -88,27 +91,37 @@ class HyperSim(DataParser):
         self._rescale_scene_with_boundary()
 
         if self.test_tuning:
-            # Reconstructed images and masks are numbered from 0 to len(val_data), so different naming convention
-            img_ids = [x.split('.')[0] + '.{:04d}'.format(y) for (x, y) in zip(self.img_ids, range(len(self.img_ids)))]
-            self.all_reconstructed_image_names = [str(self.config.data) + '/images/no_filt_rendered_' +
+            # Reconstructed images and masks are numbered from 0 to len(val_data),
+            # so different naming convention
+            img_ids = [x.split('.')[0] + '.{:04d}'.format(y) for (x, y) in
+                                    zip(self.img_ids, range(len(self.img_ids)))]
+            self.gen_image_names = [str(self.config.data) + '/images/no_filt_rendered_' +
                 x.split('.')[0] + '/frame.' + x.split('.')[-1] + '.color.png' for x in img_ids]
-            self.all_reconstructed_mask_names = [str(self.config.data) + '/images/no_filt_rendered_' +
+            self.all_gen_mask_names = [str(self.config.data) + '/images/no_filt_rendered_' +
                 x.split('.')[0] + '/frame.' + x.split('.')[-1] + '.valid.png' for x in img_ids]
-            self.all_reconstructed_poses = self.poses.copy()
-        if self.use_random_views:
-            self.num_random_views = len(list((self.config.data / 'images' / 'random_renders').rglob("*.png"))) // 2
-            img_ids = ['{:04d}'.format(x) for x in range(self.num_random_views)]
-            self.all_reconstructed_image_names = [None]*len(self.all_image_names) + [str(self.config.data) + '/images/random_renders2/frame.'
-                                                  + x + '.color.png' for x in img_ids]
-            self.all_reconstructed_mask_names = [None]*len(self.all_image_names) + [str(self.config.data) + '/images/random_renders2/frame.' 
-                                                  + x + '.valid.png' for x in img_ids]
-            self.all_reconstructed_poses = torch.from_numpy(np.load(self.config.data / 'images' / 'random_renders2' / 'random_poses.npy')).float()
-            self.all_reconstructed_poses = torch.cat((self.poses, self.all_reconstructed_poses), dim=0)
-            self.poses = self.all_reconstructed_poses.clone()
+            self.all_gen_poses = self.poses.copy()
+        elif self.use_pregen_random_views:
+            self.num_total_random_poses = len(list((self.config.data / 'images'
+                                              / 'random_renders').rglob("*.png"))) // 2
+            img_ids = ['{:04d}'.format(x) for x in range(self.num_total_random_poses)]
+            self.gen_image_names = [None]*len(self.all_image_names) + [
+                str(self.config.data) + '/images/random_renders2/frame.' + x + '.color.png' for x in img_ids]
+            self.gen_mask_names = [None]*len(self.all_image_names) + [
+                str(self.config.data) + '/images/random_renders2/frame.' + x + '.valid.png' for x in img_ids]
+            self.gen_poses = torch.from_numpy(np.load(self.config.data / 'images'
+                                    / 'random_renders2' / 'random_poses.npy')).float()
+            self.gen_poses = torch.cat((self.poses, self.gen_poses), dim=0)
+            self.poses = self.gen_poses.clone()
+        elif self.use_on_the_fly_random_views:
+            self.gen_image_names = None
+            self.gen_mask_names = None
+            self.gen_poses = self.generate_all_random_poses(self.poses, num_poses=self.num_total_random_poses)
+            self.gen_poses = torch.cat((self.poses, self.gen_poses), dim=0).cuda()
+            self.poses = self.gen_poses.clone()
         else:
-            self.all_reconstructed_image_names = None
-            self.all_reconstructed_mask_names = None
-            self.all_reconstructed_poses = None
+            self.gen_image_names = None
+            self.gen_mask_names = None
+            self.gen_poses = None
 
         cameras = Cameras(fx=self.fx, fy=self.fy, cx=self.cx, cy=self.cy,
                           height=self.config.height, width=self.config.width,
@@ -127,14 +140,15 @@ class HyperSim(DataParser):
                       "semantic_filenames": self.all_semantic_names,
                       "semantic_instance_filenames": self.all_semantic_instance_names,
                       "entity_id_filenames": self.all_entity_id_names,
-                      "reconstructed_image_filenames": self.all_reconstructed_image_names,
-                      "reconstructed_mask_filenames": self.all_reconstructed_mask_names,
-                      "reconstructed_poses": self.all_reconstructed_poses,
+                      "gen_image_filenames": self.gen_image_names,
+                      "gen_mask_filenames": self.gen_mask_names,
+                      "gen_poses": self.gen_poses,
                       "m_per_asset_unit": self.config.m_per_asset_unit,
                       "H_orig": self.config.height, "W_orig": self.config.width,
                       "scene_boundary": self.scene_boundary,
                       "xyz_min": self.xyz_min, "xyz_max": self.xyz_max,
                       "M_cam_from_uv": self.M_cam_from_uv,
+                      "fx": self.fx, "fy": self.fy, "cx": self.cx, "cy": self.cy,
                       "orig_poses": self.orig_poses})
         return dataparser_outputs
 
@@ -349,3 +363,100 @@ class HyperSim(DataParser):
         self.transform[:3, 3] = -shift.unsqueeze(0)
         self.transform = self.transform[:3, :]
         self.scale_factor = 1.0/(2*scale)
+
+    def generate_all_random_poses(self, poses: TensorType, num_poses: int = 1500):
+        """Generate all random poses that will be used for training"""
+        print(f'Generating {num_poses} random poses from trainset poses...')
+
+        # Poses are in Right-Up-Back (Cam to World) format
+        all_poses = poses.numpy()
+        all_ups = all_poses[:, :3, 1]
+        all_origins = all_poses[:, :3, 3]
+        all_z_axes = -all_poses[:, :3, 2]
+        all_lookat = all_origins + all_z_axes
+
+        # Using faiss to cluster all_origins into 2 clusters, and sample pairs
+        # separately from each cluster
+        kmeans = faiss.Kmeans(d=3, k=2, niter=20, verbose=False)
+        kmeans.train(all_origins.astype(np.float32))
+        _, I = kmeans.index.search(all_origins.astype(np.float32), 1)
+        cluster1 = {i: all_origins[i] for i in range(all_origins.shape[0]) if I[i] == 0}
+        cluster2 = {i: all_origins[i] for i in range(all_origins.shape[0]) if I[i] == 1}
+
+        def sample_new_ups(num_ups):
+            """Randomly selects 2 different camera ups, and lineraly interpolates between them"""
+            idx1 = np.random.choice(all_ups.shape[0], size=num_ups*2, replace=True)
+            ratios = np.random.rand(num_ups)
+            up1 = all_ups[idx1[:num_ups]]
+            up2 = all_ups[idx1[num_ups:]]
+            new_ups = ratios[:, None] * up1 + (1 - ratios[:, None]) * up2
+            return new_ups
+        
+        def spread_out_sample_new_origin_and_z_axes(num_origins):
+            """Randomly selects a camera origin, and lineraly interpolates with center of room,
+            end-goal is to generate camera poses that are spread out over entire room"""
+            all_origins = np.concatenate([all_origins, np.zeros((1, 3))], axis=0)
+            idx1 = np.random.choice(all_origins.shape[0]-1, size=num_origins, replace=True)
+            ratios = np.random.rand(num_origins)
+            origin1 = all_origins[idx1]
+            origin2 = np.repeat(all_origins[-1][None, :], num_origins, axis=0)
+            new_origins = ratios[:, None] * origin1 + (1 - ratios[:, None]) * origin2
+            
+            # Randomly inverts to other side of origin - More likely if closer to
+            # center of room (avoid going through walls)
+            probs = np.random.rand(num_origins)
+            new_origins = np.where((probs*ratios < 0.2).reshape(num_origins, 1), -new_origins, new_origins)
+
+            # Sample same lookat point as the original view
+            new_lookats = all_lookat[idx1]
+            new_z_axes = new_lookats - new_origins
+
+            # Randomly shift origin about z_axis, so as to sample both below and above
+            probs = np.random.rand(num_origins)
+            new_origins[:, 2] = np.where(probs < 0.5, -new_origins[:,2], new_origins[:,2])
+            return new_origins, new_z_axes
+
+        def closeby_sample_new_origin_and_z_axes(num_origins):
+            """Randomly selects 2 different camera origins, and lineraly interpolates between them,
+            end-goal is to generate camera poses that are close to original views"""
+            idx1 = np.random.choice(all_origins.shape[0], size=num_origins, replace=True)
+            # Sample idx2 from the same cluster as idx1
+            idx2 = np.array([np.random.choice(list(cluster1.keys())) if I[i] == 0 
+                             else np.random.choice(list(cluster2.keys())) for i in idx1])
+            ratios = np.random.rand(num_origins)
+            origin1 = all_origins[idx1]
+            origin2 = all_origins[idx2]
+            new_origins = ratios[:, None] * origin1 + (1 - ratios[:, None]) * origin2
+
+            z_axis1 = all_z_axes[idx1]
+            z_axis2 = all_z_axes[idx2]
+            new_z_axes = ratios[:, None] * z_axis1 + (1 - ratios[:, None]) * z_axis2
+            return new_origins, new_z_axes
+        
+        def normalize(x):
+            """Normalization helper function."""
+            return x / np.linalg.norm(x)
+
+        def viewmatrix(lookdir, up, position, subtract_position=False):
+            """Construct lookat view matrix."""
+            vec2 = normalize((lookdir - position) if subtract_position else lookdir)
+            vec0 = normalize(np.cross(up, vec2))
+            vec1 = normalize(np.cross(vec2, vec0))
+            m = np.stack([vec0, vec1, vec2, position], axis=1)
+            return m
+
+        new_poses = []
+        new_ups = sample_new_ups(num_poses)
+        # new_origins, new_z_axes = spread_out_sample_new_origin_and_z_axes(num_poses)
+        new_origins, new_z_axes = closeby_sample_new_origin_and_z_axes(num_poses)
+        for i in range(num_poses):
+            new_poses.append(viewmatrix(new_z_axes[i], new_ups[i], new_origins[i]))
+        
+        # Poses are in Left-Up-Front (Cam to World) format, converting it back to
+        # Right-Up-Back (Cam to World) format
+        new_poses = np.stack(new_poses, axis=0)
+        new_poses[:, :, 0] = -new_poses[:, :, 0]
+        new_poses[:, :, 2] = -new_poses[:, :, 2]
+        new_poses = np.concatenate([new_poses, np.zeros((num_poses, 1, 4))], axis=1)
+        new_poses[:, 3, 3] = 1.0
+        return torch.from_numpy(new_poses).float()

@@ -23,9 +23,14 @@ from typing import Dict
 import numpy as np
 import torch
 import torch.nn.functional as F
-from PIL import Image
+from einops import rearrange
+from PIL import Image, ImageFilter
 from typing import List
 from torchtyping import TensorType
+
+from pytorch3d.structures import Pointclouds
+from pytorch3d.renderer import (PerspectiveCameras, PointsRasterizer,
+    PointsRasterizationSettings, NormWeightedCompositor, PointsRenderer)
 
 from nerfstudio.data.dataparsers.base_dataparser import DataparserOutputs
 from nerfstudio.data.datasets.base_dataset import InputDataset
@@ -40,11 +45,13 @@ class HyperSimDataset(InputDataset):
         scale_factor: The downscaling factor for the dataparser outputs.
     """
     def __init__(self, dataparser_outputs: DataparserOutputs, scale_factor: float = 1.0,
-                 labels: List[str] = [], test_tuning: bool = False, random_views: bool = False):
+                 labels: List[str] = [], test_tuning: bool = False, pregen_random_views: bool = False,
+                 on_the_fly_random_views: bool = False):
         super().__init__(dataparser_outputs, scale_factor)
         self.labels = labels
         self.test_tuning = test_tuning
-        self.random_views = random_views
+        self.pregen_random_views = pregen_random_views
+        self.on_the_fly_random_views = on_the_fly_random_views
         
         self.img_filenames = dataparser_outputs.image_filenames
         self.depth_filenames = self.metadata["depth_filenames"]
@@ -52,17 +59,22 @@ class HyperSimDataset(InputDataset):
         self.semantic_filenames = self.metadata["semantic_filenames"]
         self.semantic_instance_filenames = self.metadata["semantic_instance_filenames"]
         self.entity_id_filenames = self.metadata["entity_id_filenames"]
-        self.reconstructed_image_filenames = self.metadata["reconstructed_image_filenames"]
-        self.reconstructed_mask_filenames = self.metadata["reconstructed_mask_filenames"]
-        self.reconstructed_poses = self.metadata["reconstructed_poses"]
+        self.gen_image_filenames = self.metadata["gen_image_filenames"]
+        self.gen_mask_filenames = self.metadata["gen_mask_filenames"]
+        self.gen_poses = self.metadata["gen_poses"]
 
         if self.test_tuning:
-            print("Test Tuning is enabled, so loading the reconstructed images and their masks")
-            self.labels = labels + ["reconstructed", "mask"]
-        if self.random_views:
-            self.num_random_views = len(self.reconstructed_image_filenames) - len(self.img_filenames)
-            print(f"Random Views is enabled, so using {self.num_random_views} additional views for training")
+            print(f"Test Tuning is enabled, so loading the reconstructed test-view images and their masks")
+            self.labels = labels + ["pregenerated", "mask"]
+        elif self.pregen_random_views:
+            self.num_random_views = len(self.gen_image_filenames) - len(self.img_filenames)
+            print(f"Pregenerated Random Views is enabled, so loading {self.num_random_views} additional views for training")
             self.labels = labels + ["mask"]
+        elif self.on_the_fly_random_views:
+            print(f"On the fly Random Views is enabled, so generating random views every epoch")
+            self.num_random_views = self.gen_poses.shape[0] - len(self.img_filenames)
+            self.labels = labels + ["mask", "pose"]
+            self.prepare_random_view_generation()
 
         self.m_per_asset_unit = self.metadata["m_per_asset_unit"]
         self.H_orig = self.metadata["H_orig"]
@@ -73,7 +85,11 @@ class HyperSimDataset(InputDataset):
         self.xyz_max = self.metadata["xyz_max"]
         self.scene_boundary = self.metadata["scene_boundary"]
         self.M_cam_from_uv = self.metadata["M_cam_from_uv"]
-        self.poses = self.metadata["orig_poses"]
+        self.fx = self.metadata["fx"]
+        self.fy = self.metadata["fy"]
+        self.cx = self.metadata["cx"]
+        self.cy = self.metadata["cy"]
+        self.orig_poses = self.metadata["orig_poses"]
 
         if "depth" in self.labels:
             self._process_and_clip_depth()
@@ -164,7 +180,7 @@ class HyperSimDataset(InputDataset):
             elif label == 'semantics':
                 content = F.interpolate(torch.unsqueeze(content, dim = 0).float(),
                     size = self.new_size, mode='nearest').squeeze(0).type(content.dtype)
-            elif label == 'reconstructed':
+            elif label == 'pregenerated':
                 content = F.interpolate(content.permute(2,0,1), size = self.new_size,
                                         mode='bilinear').permute(1,2,0)
             elif label == 'mask':
@@ -218,27 +234,37 @@ class HyperSimDataset(InputDataset):
                     wall_floor_mask = (content == 1) + (content == 2)
                     content[np.logical_not(wall_floor_mask)] = 3
 
-            elif label == "reconstructed":
-                content = np.array(Image.open(self.reconstructed_image_filenames[image_idx], 'r')).astype('float32') / 255.0
+            elif label == "pregenerated":
+                content = np.array(Image.open(self.gen_image_filenames[image_idx],
+                                              'r')).astype('float32') / 255.0
                 if content is None:
                     content = np.zeros((self.H_orig, self.W_orig, 3), dtype=np.float32)
                 zero_vect = np.zeros(3, dtype=content.dtype)
                 content[np.isnan(np.abs(content).sum(axis=-1))] = zero_vect
 
             elif label == "mask":
-                if self.random_views:
-                    content = None
+                if self.test_tuning:
+                    # Only in this case, we load pregen_masks here
+                    content = np.array(Image.open(self.gen_mask_filenames[image_idx],
+                                                  'r')).astype('float32') / 255.0
                 else:
-                    content = np.array(Image.open(self.reconstructed_mask_filenames[image_idx], 'r')).astype('float32') / 255.0
-
+                    # In all other cases, its original train_images so use full white mask
+                    content = None
                 if content is None:
                     content = np.ones((self.H_orig, self.W_orig), dtype=np.float32)
                 content[np.isnan(np.abs(content).sum(axis=-1))] = 1.0
+            elif label == "pose":
+                content = self.gen_poses[image_idx]
             else:
                 raise NotImplementedError(f"Label {label} is not implemented")
             
             assert content is not None, f"Content for label {label} is unavailable"
-            metadata[label] = self._downscale_content(torch.from_numpy(content), label) if label != "depth" else self._downscale_content(content, label)
+            if label == "pose":
+                metadata[label] = content
+            elif label == "depth":
+                metadata[label] = self._downscale_content(content, label)
+            else:
+                metadata[label] = self._downscale_content(torch.from_numpy(content), label)
         return metadata
     
     def _process_and_clip_depth(self):
@@ -258,38 +284,205 @@ class HyperSimDataset(InputDataset):
         if (self.xyz_min != self.scene_boundary['xyz_scene_min']).any() or \
            (self.xyz_max != self.scene_boundary['xyz_scene_max']).any():
             self.ray_centers_cam = hypersim_generate_camera_rays((self.H, self.W), self.M_cam_from_uv)
-            self.P_world = hypersim_generate_pointcloud(self.ray_centers_cam, self.poses, all_depths)
+            self.P_world = hypersim_generate_pointcloud(self.ray_centers_cam, self.orig_poses, all_depths)
             self.all_depths = hypersim_clip_depths_to_bbox(depths=all_depths, 
-                P_world=self.P_world, poses=self.poses, xyz_min=self.xyz_min, xyz_max=self.xyz_max)
+                P_world=self.P_world, poses=self.orig_poses, xyz_min=self.xyz_min, xyz_max=self.xyz_max)
         else:
             self.all_depths = all_depths
         # Scale depth with respect to scene scaling factor (calculated in dataparser)
         self.all_depths *= self._dataparser_outputs.dataparser_scale
 
-    def __get_rand_item__(self, image_idx: int) -> Dict:
+    def __get_pregen_rand_item__(self, image_idx: int) -> Dict:
         data = {"image_idx": image_idx}
-        data["pose"] = self.reconstructed_poses[image_idx]
+        data["pose"] = self.gen_poses[image_idx]
         
-        image = np.array(Image.open(self.reconstructed_image_filenames[image_idx], 'r')).astype('float32') / 255.0
+        image = np.array(Image.open(self.gen_image_filenames[image_idx], 'r')).astype('float32') / 255.0
         if image is None:
             image = np.zeros((self.H_orig, self.W_orig, 3), dtype=np.float32)
         zero_vect = np.zeros(3, dtype=image.dtype)
         image[np.isnan(np.abs(image).sum(axis=-1))] = zero_vect
         data["image"] = self._downscale_content(torch.from_numpy(image), "image")
         
-        mask = np.array(Image.open(self.reconstructed_mask_filenames[image_idx], 'r')).astype('float32') / 255.0
+        mask = np.array(Image.open(self.gen_mask_filenames[image_idx], 'r')).astype('float32') / 255.0
         if mask is None:
             mask = np.ones((self.H_orig, self.W_orig), dtype=np.float32)
         mask[np.isnan(np.abs(mask).sum(axis=-1))] = 1.0
         data["mask"] = self._downscale_content(torch.from_numpy(mask), "mask")
 
-        # if "depth" in self.labels:
-        #     depth = np.zeros((self.H_orig, self.W_orig), dtype=np.float32)
-        #     depth[np.isnan(depth)] = 0.0
-        #     data["depth"] = self._downscale_content(torch.from_numpy(depth), "depth")
-        # if "normals" in self.labels:
-        #     normals = np.zeros((self.H_orig, self.W_orig, 3), dtype=np.float32)
-        #     zero_vect = np.zeros(3, dtype=normals.dtype)
-        #     normals[np.isnan(np.abs(normals).sum(axis=-1))] = zero_vect
-        #     data["normals"] = self._downscale_content(torch.from_numpy(normals), "normals")
+        if "depth" in self.labels:
+            depth = np.zeros((self.H_orig, self.W_orig), dtype=np.float32)
+            depth[np.isnan(depth)] = 0.0
+            data["depth"] = self._downscale_content(torch.from_numpy(depth), "depth")
+        if "normals" in self.labels:
+            normals = np.zeros((self.H_orig, self.W_orig, 3), dtype=np.float32)
+            zero_vect = np.zeros(3, dtype=normals.dtype)
+            normals[np.isnan(np.abs(normals).sum(axis=-1))] = zero_vect
+            data["normals"] = self._downscale_content(torch.from_numpy(normals), "normals")
         return data
+    
+    def prepare_random_view_generation(self) -> None:
+        self.use_max_filtering = False
+        if self.device is None:
+            self.device = torch.device("cuda:0")
+        self.f = torch.tensor([self.fx, self.fy], dtype=torch.float32).cuda()
+        self.p = torch.tensor([self.cx, self.cy], dtype=torch.float32).cuda()
+        K = torch.tensor([[self.fx, 0, self.cx], [0, self.fy, self.cy], [0, 0, 1]], dtype=torch.float32).cuda()
+        Kinv = torch.inverse(K)
+
+        uv_2 = np.stack(np.meshgrid(np.arange(0, self.W), np.arange(0, self.H)[::-1]), -1)     # (H, W, 2)
+        uv_2 = rearrange(uv_2, "h w c -> (h w) c")
+        uv_2 = np.concatenate([uv_2, np.ones((uv_2.shape[0], 1))], axis=-1).astype(np.float32) # (H*W, 3)
+        uv_2 = torch.as_tensor(uv_2, dtype=torch.float32, device=self.device)
+
+        self.all_points = {}
+        self.all_colors = {}
+        for j in range(len(self.img_filenames)):
+            train_data = self.__getitem__(j)
+            img2 = train_data["image"]
+
+            D2 = train_data["depth"]                # (H, W)
+            D2 = rearrange(D2, "h w -> (h w) 1")
+            R2 = train_data["pose"][:3, :3]         # (3, 3) in Right-Up-Back (Cam 2 World) format
+            t2 = train_data["pose"][:3, 3]          # (3, 1) in Right-Up-Back (Cam 2 World) format
+
+            P_2 = D2.T * (Kinv @ uv_2.T)            # (3, H*W)
+            P_2[2, :] *= -1
+            P_world = (R2 @ P_2 + t2[:, None])
+
+            # Creating batches (bs) of pointclouds in PyTorch3D (here bs = 1)
+            P_world_flat = rearrange(P_world, "c hw -> 1 hw c")
+            img2_flat = rearrange(img2, "h w c -> 1 (h w) c")
+            self.all_points[2*j] = P_world_flat
+            self.all_colors[2*j] = img2_flat
+
+            # White mask for knowing invalid points (and filtering only them)
+            self.all_points[2*j + 1] = P_world_flat
+            self.all_colors[2*j + 1] = torch.ones_like(img2_flat)
+        self.rand_indices = [x + len(self.img_filenames) for x in np.random.choice(self.num_random_views, num_views, replace=False)] 
+        self.rand_poses = self.gen_poses[self.rand_indices]
+    
+    def generate_random_views(self, num_views: int) -> TensorType:
+        """Generate random views of gen_poses on the fly from training images"""
+        # Randomly sample num_views random poses from gen_poses
+        self.rand_indices = [x + len(self.img_filenames) for x in np.random.choice(self.num_random_views, num_views, replace=False)] 
+        self.rand_poses = self.gen_poses[self.rand_indices]
+        self.rendered_images = []
+        self.rendered_masks = []
+        for i in range(num_views):
+            tgt_pose = self.rand_poses[i]
+            # Transform from Right-Up-Back (Cam to World) format to
+            # Left-Up-Front (World to Cam) format of PyTorch3D
+            R_gt = tgt_pose[:3,:3].numpy().copy()
+            t_gt = tgt_pose[:3, 3].numpy().copy()
+            R_gt[:, 0] = -R_gt[:, 0]
+            R_gt[:, 2] = -R_gt[:, 2]
+            t_gt = torch.as_tensor(-R_gt.T @ t_gt[:, None], dtype=torch.float32, device=self.device).squeeze()
+            R_gt = torch.as_tensor(R_gt.T, dtype=torch.float32, device=self.device)
+
+            # Randomly sampling few closest and few random images from trainset for each new random view
+            # t_gt_np = tgt_pose[:3, 3].numpy()
+            # distances_to_gt = []
+            # for idx in range(len(self.img_filenames)):
+            #     data = self.__getitem__(idx)
+            #     cam1_to_world = data["pose"].numpy()
+            #     t1 = cam1_to_world[:3, 3]
+            #     distances_to_gt.append(np.linalg.norm(t1 - t_gt_np))
+            # distances_to_gt = np.array(distances_to_gt)
+            # closest_images = np.argsort(distances_to_gt)[:self.NUM_CLOSEST_TRAIN_VIEWS]
+            # random_images = np.random.choice(np.delete(np.arange(len(self.img_filenames)), \
+            #                     closest_images), self.NUM_RANDOM_TRAIN_VIEWS, replace=False)
+            # closest_images = np.concatenate([closest_images, random_images])
+
+            # Randomly sample 2 training images
+            train_idxs = np.random.choice(len(self.img_filenames), 2, replace=False)
+
+            points = []
+            colors = []
+            for idx in train_idxs:
+                points.append(self.all_points[2*idx])
+                colors.append(self.all_colors[2*idx])
+                points.append(self.all_points[2*idx + 1])
+                colors.append(self.all_colors[2*idx + 1])
+            points = torch.cat(points, dim=0)
+            colors = torch.cat(colors, dim=0)
+            point_cloud = Pointclouds(points=points, features=colors)
+
+            # Creating batches of cameras (here bs = 1)
+            # Technically the R, t are from whatever frame each pointcloud is in, to the rendering frame.
+            # Additionally R needs to be transposed (row-major format in Pytorch3D)
+            cameras = PerspectiveCameras(focal_length=self.f.unsqueeze(0), principal_point=self.p.unsqueeze(0),
+                                        image_size=[(self.H, self.W)], R=R_gt.T.unsqueeze(0), T=t_gt.unsqueeze(0),
+                                        in_ndc=False, device=self.device)
+            raster_settings = PointsRasterizationSettings(image_size=(self.H, self.W), radius=1.0/min(self.H, self.W)*2.0, points_per_pixel=2)
+            rasterizer = PointsRasterizer(cameras=cameras, raster_settings=raster_settings)
+            renderer = PointsRenderer(rasterizer=rasterizer, compositor=NormWeightedCompositor())
+            rendered_images = renderer(point_cloud).cpu().numpy()
+
+            # Finding maximum coverage of image - this should be done with mask, but that is buggy
+            overlap_area = []
+            for idx in range(0, 2*2, 2):
+                render_mask = (rendered_images[idx+1, :, :, ::-1]*255).astype(np.uint8)
+                overlap_area.append(np.sum(np.all(render_mask  != 0, axis=-1)))
+            max_overlap_idx = np.argmax(overlap_area)
+            image = (rendered_images[max_overlap_idx*2, :, :, ::-1]*255).astype(np.uint8)
+            mask = (rendered_images[max_overlap_idx*2+1, :, :, ::-1]*255).astype(np.uint8)
+
+            # Apply max filter twice to remove missing pixels (ignore actual black objects)
+            if self.use_max_filtering:
+                img_0 = Image.fromarray(image)
+                img_1 = np.array(img_0.filter(ImageFilter.MaxFilter(3)))
+                black_pixels = np.where(np.all(mask == 0, axis=-1))
+                img_2 = image.copy()
+                img_2[black_pixels] = img_1[black_pixels]
+                changed_pixels = np.where(np.all(image != img_2, axis=-1))
+                mask[changed_pixels] = np.array([255, 255, 255])
+
+                img_3 = Image.fromarray(img_2)
+                img_4 = np.array(img_3.filter(ImageFilter.MaxFilter(3)))
+                black_pixels = np.where(np.all(mask == 0, axis=-1))
+                img_5 = img_2.copy()
+                img_5[black_pixels] = img_4[black_pixels]
+                changed_pixels = np.where(np.all(img_2 != img_5, axis=-1))
+                mask[changed_pixels] = np.array([255, 255, 255])
+            else:
+                img_5 = image
+
+            self.rendered_images.append(img_5)
+            self.rendered_masks.append(mask)
+        return self.rand_indices
+        
+    def __get_on_the_fly_rand_item__(self, image_idx: int) -> Dict:
+        data = {"image_idx": image_idx}
+        data["pose"] = self.gen_poses[image_idx]
+        
+        image = self.rendered_images[image_idx] / 255.0
+        if image is None:
+            image = np.zeros((self.H_orig, self.W_orig, 3), dtype=np.float32)
+        zero_vect = np.zeros(3, dtype=image.dtype)
+        image[np.isnan(np.abs(image).sum(axis=-1))] = zero_vect
+        data["image"] = self._downscale_content(torch.from_numpy(image), "image")
+        
+        mask = self.rendered_masks[image_idx] / 255.0
+        if mask is None:
+            mask = np.ones((self.H_orig, self.W_orig), dtype=np.float32)
+        mask[np.isnan(np.abs(mask).sum(axis=-1))] = 1.0
+        data["mask"] = self._downscale_content(torch.from_numpy(mask), "mask")
+
+        if "depth" in self.labels:
+            depth = np.zeros((self.H_orig, self.W_orig), dtype=np.float32)
+            depth[np.isnan(depth)] = 0.0
+            data["depth"] = self._downscale_content(torch.from_numpy(depth), "depth")
+        if "normals" in self.labels:
+            normals = np.zeros((self.H_orig, self.W_orig, 3), dtype=np.float32)
+            zero_vect = np.zeros(3, dtype=normals.dtype)
+            normals[np.isnan(np.abs(normals).sum(axis=-1))] = zero_vect
+            data["normals"] = self._downscale_content(torch.from_numpy(normals), "normals")
+        return data
+    
+    def __get_rand_item__(self, image_idx: int) -> Dict:
+        if self.pregen_random_views:
+            return self.__get_pregen_rand_item__(image_idx)
+        elif self.on_the_fly_random_views:
+            return self.__get_on_the_fly_rand_item__(image_idx)
+        else:
+            raise NotImplementedError("Both Pregen & On the fly Random Views are disabled!")

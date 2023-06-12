@@ -211,8 +211,14 @@ class VanillaPipelineConfig(cfg.InstantiateConfig):
     """specifies the model config"""
     test_tuning: bool = False
     """Whether we are tuning a model on reconstructed test data"""
-    random_views: bool = False
-    """Whether we are using randomly generated views for training"""
+    pregen_random_views: bool = False
+    """Whether we are using randomly pre-generated views for training"""
+    on_the_fly_random_views: bool = False
+    """Whether we are using randomly generating views on-the-fly for training"""
+    new_views_every_iters: int = 1000
+    """How often to generate new random views for training"""
+    num_random_views: int = 50
+    """How many random views to use for a batch of training"""
 
 
 class VanillaPipeline(Pipeline):
@@ -240,13 +246,17 @@ class VanillaPipeline(Pipeline):
         test_mode: Literal["test", "val", "inference"] = "val",
         world_size: int = 1,
         local_rank: int = 0,
+        max_num_iterations: int = 1000000,
     ):
         super().__init__()
         self.config = config
         self.test_mode = test_mode
         self.datamanager: VanillaDataManager = config.datamanager.setup(
             device=device, test_mode=test_mode, world_size=world_size, local_rank=local_rank,
-            test_tuning=self.config.test_tuning, random_views=self.config.random_views
+            test_tuning=self.config.test_tuning, pregen_random_views=self.config.pregen_random_views,
+            on_the_fly_random_views=self.config.on_the_fly_random_views,
+            num_total_random_poses=self.config.num_random_views*max_num_iterations,
+            num_random_views_per_batch=self.config.num_random_views
         )
         self.datamanager.to(device)
         # TODO(ethan): get rid of scene_bounds from the model
@@ -257,8 +267,10 @@ class VanillaPipeline(Pipeline):
             num_train_data=len(self.datamanager.train_dataset),
             metadata=self.datamanager.train_dataset.metadata,
             test_tuning=self.config.test_tuning,
-            random_views=self.config.random_views,
-            num_test_data=len(self.datamanager.eval_dataset) if self.datamanager.eval_dataset is not None else 0
+            num_test_data=len(self.datamanager.eval_dataset) if self.datamanager.eval_dataset is not None else 0,
+            pregen_random_views=self.config.pregen_random_views,
+            on_the_fly_random_views=self.config.on_the_fly_random_views,
+            num_random_views=self.config.num_random_views,
         )
         self.model.to(device)
 
@@ -281,6 +293,9 @@ class VanillaPipeline(Pipeline):
         Args:
             step: current iteration step to update sampler if using DDP (distributed)
         """
+        if self.config.on_the_fly_random_views and step % self.config.new_views_every_iters == 0:
+            rand_indices = self.datamanager.generate_random_views(self.config.num_random_views)
+            self.model.reset_illumination_parameters(rand_indices)
         ray_bundle, batch = self.datamanager.next_train(step)
         model_outputs = self.model(ray_bundle)
         metrics_dict = self.model.get_metrics_dict(model_outputs, batch)

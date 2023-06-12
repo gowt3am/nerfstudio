@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from typing import Type, List, Any, Union, Literal
 
 import torch
+from torchtyping import TensorType
 from nerfstudio.data.datamanagers.base_datamanager import (
     VanillaDataManager,
     VanillaDataManagerConfig,
@@ -33,7 +34,7 @@ class HyperSimDataManagerConfig(VanillaDataManagerConfig):
     """A hypersim datamanager - required to use with .setup()"""
     _target: Type = field(default_factory=lambda: HyperSimDataManager)
     
-    labels: List[str] = field(default_factory=lambda: []) #field(default_factory=lambda: ["normals", "depth"])
+    labels: List[str] = field(default_factory=lambda: ["normals", "depth"])
     """Labels/Files to load"""
     ray_sampling_strategy: str = "triangle"
     """The ray sampling strategy to use. Options are "triangle" and "uniform"."""
@@ -66,7 +67,7 @@ class HyperSimDataManager(VanillaDataManager):  # pylint: disable=abstract-metho
         self, dataset: InputDataset, *args: Any, **kwargs: Any) -> PixelSampler:
         """Infer which pixel sampler to use."""
         if self.config.ray_sampling_strategy == "triangle":
-            if self.test_tuning or self.random_views:
+            if self.test_tuning or self.pregen_random_views or self.on_the_fly_random_views:
                 raise ValueError("Triangle pixel sampler is not supported for test tuning with masks currently, use uniform.")
             return TrianglePixelSampler(*args, **kwargs, height = dataset.H,
                     width = dataset.W, dilation_rate = self.config.dilation_rate)
@@ -79,9 +80,18 @@ class HyperSimDataManager(VanillaDataManager):  # pylint: disable=abstract-metho
         return HyperSimDataset(dataparser_outputs=self.train_dataparser_outputs,
                                scale_factor=self.config.camera_res_scale_factor,
                                labels=self.config.labels, test_tuning=self.test_tuning,
-                               random_views=self.random_views)
+                               pregen_random_views=self.pregen_random_views,
+                               on_the_fly_random_views=self.on_the_fly_random_views)
 
     def create_eval_dataset(self) -> HyperSimDataset:
         return HyperSimDataset(dataparser_outputs=self.dataparser.get_dataparser_outputs(
             split=self.test_split), scale_factor=self.config.camera_res_scale_factor,
-            labels=self.config.labels, test_tuning=False, random_views=False)
+            labels=self.config.labels, test_tuning=False, pregen_random_views=False,
+            on_the_fly_random_views=False)
+
+    def generate_random_views(self, num_views: int) -> TensorType:
+        """Generate random views for training.
+        Args:
+            num_views: number of random views to generate
+        """
+        return self.train_dataset.generate_random_views(num_views)
