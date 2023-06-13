@@ -363,8 +363,7 @@ class HyperSimDataset(InputDataset):
     def generate_random_views(self, num_views: int) -> Dict:
         """Generate random views of gen_poses on the fly from training images"""
         # Randomly sample num_views random poses from gen_poses
-        self.rand_indices = [x + len(self.img_filenames) for x in np.random.choice(
-                                self.num_random_views, num_views, replace=False)] 
+        self.rand_indices = [x + len(self.img_filenames) for x in np.random.choice(self.num_random_views, num_views, replace=False)]
         
         self.rand_poses = self.gen_poses[self.rand_indices]
         self.rendered_images = []
@@ -424,13 +423,13 @@ class HyperSimDataset(InputDataset):
             if self.try_num_train_views_per_new_view > 1:
                 overlap_area = []
                 for idx in range(0, 2*self.try_num_train_views_per_new_view, 2):
-                    render_mask = (rendered_images[idx+1, :, :, ::-1]*255).astype(np.uint8)
+                    render_mask = (rendered_images[idx+1, :, :, :]*255).astype(np.uint8)
                     overlap_area.append(np.sum(np.all(render_mask  != 0, axis=-1)))
                 max_overlap_idx = np.argmax(overlap_area)
             else:
                 max_overlap_idx = 0
-            image = (rendered_images[max_overlap_idx*2, :, :, ::-1]*255).astype(np.uint8)
-            mask = (rendered_images[max_overlap_idx*2+1, :, :, ::-1]*255).astype(np.uint8)
+            image = (rendered_images[max_overlap_idx*2, :, :, :]*255).astype(np.uint8)
+            mask = (rendered_images[max_overlap_idx*2+1, :, :, :]*255).astype(np.uint8)
 
             # Apply max filter twice to remove missing pixels (ignore actual black objects)
             if self.use_max_filtering:
