@@ -397,19 +397,20 @@ class HyperSimDataset(InputDataset):
 
             # # Randomly sample few training images
             # train_idxs = np.random.choice(len(self.img_filenames), self.try_num_train_views_per_new_view, replace=False)
+            # points = []
+            # colors = []
+            # for idx in train_idxs:
+            #     points.append(self.all_points[2*idx])
+            #     colors.append(self.all_colors[2*idx])
+            #     points.append(self.all_points[2*idx + 1])
+            #     colors.append(self.all_colors[2*idx + 1])
+            # points = torch.cat(points, dim=0).cuda().float()
+            # colors = torch.cat(colors, dim=0).cuda().float()
             # Select the nearest training view for each new random view
             self.try_num_train_views_per_new_view = 1
-            train_idxs = self.render_camera_idx[self.rand_indices[i]]
-
-            points = []
-            colors = []
-            for idx in train_idxs:
-                points.append(self.all_points[2*idx])
-                colors.append(self.all_colors[2*idx])
-                points.append(self.all_points[2*idx + 1])
-                colors.append(self.all_colors[2*idx + 1])
-            points = torch.cat(points, dim=0).cuda().float()
-            colors = torch.cat(colors, dim=0).cuda().float()
+            train_idx = self.render_camera_idx[self.rand_indices[i]]
+            points = torch.cat([self.all_points[2*train_idx], self.all_points[2*train_idx + 1]], dim=0).cuda().float()
+            colors = torch.cat([self.all_colors[2*train_idx], self.all_colors[2*train_idx + 1]], dim=0).cuda().float()
             point_cloud = Pointclouds(points=points, features=colors)
 
             # Creating batches of cameras (here bs = 1)

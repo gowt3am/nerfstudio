@@ -118,7 +118,7 @@ class HyperSim(DataParser):
             self.gen_mask_names = None
             # self.gen_poses = self.generate_all_random_poses(self.poses, num_poses=self.num_total_random_poses)
             self.gen_poses, self.nearest_cam_ids = self.generate_all_random_poses_sparf(self.poses, num_poses=self.num_total_random_poses)
-            self.nearest_cam_ids = torch.cat((torch.arange(self.poses.shape[0]).long(), self.nearest_cam_ids), dim=0).cuda()
+            self.nearest_cam_ids = np.concatenate((np.arange(self.poses.shape[0]), self.nearest_cam_ids))
             self.gen_poses = torch.cat((self.poses, self.gen_poses), dim=0).cuda()
             self.poses = self.gen_poses.clone()
         else:
@@ -485,7 +485,7 @@ class HyperSim(DataParser):
         nearest_cam_ids = []
         for i in range(num_poses):
             dists = np.linalg.norm(all_origins - chosen_origins1[i], axis=1)
-            dists[i] = np.inf
+            dists[idx1[i]] = np.inf
             nearest_cam_ids.append(np.argmin(dists))
         choosen_origins2 = all_origins[nearest_cam_ids].copy()
         choosen_lookat2 = all_lookat[nearest_cam_ids].copy()
@@ -497,7 +497,7 @@ class HyperSim(DataParser):
         new_lookats = np.where(ratios[:, None] < 0.5, choosen_lookat2, chosen_lookat1)
         new_z_axes = new_lookats - new_origins
         render_camera_idx = np.where(ratios < 0.5, nearest_cam_ids, idx1)
-
+        
         def normalize(x):
             """Normalization helper function."""
             return x / np.linalg.norm(x)
