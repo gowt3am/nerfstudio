@@ -62,6 +62,7 @@ class HyperSimDataset(InputDataset):
         self.gen_image_filenames = self.metadata["gen_image_filenames"]
         self.gen_mask_filenames = self.metadata["gen_mask_filenames"]
         self.gen_poses = self.metadata["gen_poses"]
+        self.render_camera_idx = self.metadata["nearest_cam_ids"]
 
         self.m_per_asset_unit = self.metadata["m_per_asset_unit"]
         self.H_orig = self.metadata["H_orig"]
@@ -394,8 +395,11 @@ class HyperSimDataset(InputDataset):
             #                     closest_images), self.NUM_RANDOM_TRAIN_VIEWS, replace=False)
             # closest_images = np.concatenate([closest_images, random_images])
 
-            # Randomly sample few training images
-            train_idxs = np.random.choice(len(self.img_filenames), self.try_num_train_views_per_new_view, replace=False)
+            # # Randomly sample few training images
+            # train_idxs = np.random.choice(len(self.img_filenames), self.try_num_train_views_per_new_view, replace=False)
+            # Select the nearest training view for each new random view
+            self.try_num_train_views_per_new_view = 1
+            train_idxs = self.render_camera_idx[self.rand_indices[i]]
 
             points = []
             colors = []
@@ -451,6 +455,11 @@ class HyperSimDataset(InputDataset):
             else:
                 img_5 = image
 
+            save_dest = "/scratch_net/bmicdl02/gsenthi/data/temp/"
+            # Use Pillow to save img_5 at save_dest
+            img = Image.fromarray(img_5)
+            img.save(save_dest + f"img_{self.rand_indices[i]}.png")
+            
             self.rendered_images.append(img_5)
             self.rendered_masks.append(mask[:,:,0])
             self.rand_indices_dict[self.rand_indices[i]] = i

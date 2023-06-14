@@ -90,6 +90,7 @@ class HyperSim(DataParser):
         self._create_cam_model()
         self._rescale_scene_with_boundary()
 
+        self.nearest_cam_ids = None
         if self.test_tuning:
             # Reconstructed images and masks are numbered from 0 to len(val_data),
             # so different naming convention
@@ -115,7 +116,9 @@ class HyperSim(DataParser):
         elif self.use_on_the_fly_random_views:
             self.gen_image_names = None
             self.gen_mask_names = None
-            self.gen_poses = self.generate_all_random_poses(self.poses, num_poses=self.num_total_random_poses)
+            # self.gen_poses = self.generate_all_random_poses(self.poses, num_poses=self.num_total_random_poses)
+            self.gen_poses, self.nearest_cam_ids = self.generate_all_random_poses_sparf(self.poses, num_poses=self.num_total_random_poses)
+            self.nearest_cam_ids = torch.cat((torch.arange(self.poses.shape[0]).long(), self.nearest_cam_ids), dim=0).cuda()
             self.gen_poses = torch.cat((self.poses, self.gen_poses), dim=0).cuda()
             self.poses = self.gen_poses.clone()
         else:
@@ -143,6 +146,7 @@ class HyperSim(DataParser):
                       "gen_image_filenames": self.gen_image_names,
                       "gen_mask_filenames": self.gen_mask_names,
                       "gen_poses": self.gen_poses,
+                      "nearest_cam_ids": self.nearest_cam_ids,
                       "m_per_asset_unit": self.config.m_per_asset_unit,
                       "H_orig": self.config.height, "W_orig": self.config.width,
                       "scene_boundary": self.scene_boundary,
@@ -460,3 +464,61 @@ class HyperSim(DataParser):
         new_poses = np.concatenate([new_poses, np.zeros((num_poses, 1, 4))], axis=1)
         new_poses[:, 3, 3] = 1.0
         return torch.from_numpy(new_poses).float()
+    
+    def generate_all_random_poses_sparf(self, poses: TensorType, num_poses: int = 1500):
+        """Generate all random poses similar to SPARF that will be used for training"""
+        print(f'Generating {num_poses} random poses from trainset poses, using SPARF sampling...')
+
+        # Poses are in Right-Up-Back (Cam to World) format
+        all_poses = poses.numpy()
+        all_ups = all_poses[:, :3, 1]
+        all_origins = all_poses[:, :3, 3]
+        all_z_axes = -all_poses[:, :3, 2]
+        all_lookat = all_origins + all_z_axes
+
+        # Sample random indices out of all_poses
+        idx1 = np.random.choice(all_origins.shape[0], size=num_poses, replace=True)
+        chosen_origins1 = all_origins[idx1].copy()
+        chosen_lookat1 = all_lookat[idx1].copy()
+        chosen_ups1 = all_ups[idx1].copy()
+
+        nearest_cam_ids = []
+        for i in range(num_poses):
+            dists = np.linalg.norm(all_origins - chosen_origins1[i], axis=1)
+            dists[i] = np.inf
+            nearest_cam_ids.append(np.argmin(dists))
+        choosen_origins2 = all_origins[nearest_cam_ids].copy()
+        choosen_lookat2 = all_lookat[nearest_cam_ids].copy()
+        choosen_ups2 = all_ups[nearest_cam_ids].copy()
+
+        ratios = np.random.rand(num_poses)
+        new_origins = ratios[:, None] * chosen_origins1 + (1 - ratios[:, None]) * choosen_origins2
+        new_ups = ratios[:, None] * chosen_ups1 + (1 - ratios[:, None]) * choosen_ups2
+        new_lookats = np.where(ratios[:, None] < 0.5, choosen_lookat2, chosen_lookat1)
+        new_z_axes = new_lookats - new_origins
+        render_camera_idx = np.where(ratios < 0.5, nearest_cam_ids, idx1)
+
+        def normalize(x):
+            """Normalization helper function."""
+            return x / np.linalg.norm(x)
+
+        def viewmatrix(lookdir, up, position, subtract_position=False):
+            """Construct lookat view matrix."""
+            vec2 = normalize((lookdir - position) if subtract_position else lookdir)
+            vec0 = normalize(np.cross(up, vec2))
+            vec1 = normalize(np.cross(vec2, vec0))
+            m = np.stack([vec0, vec1, vec2, position], axis=1)
+            return m
+
+        new_poses = []
+        for i in range(num_poses):
+            new_poses.append(viewmatrix(new_z_axes[i], new_ups[i], new_origins[i]))
+        
+        # Poses are in Left-Up-Front (Cam to World) format, converting it back to
+        # Right-Up-Back (Cam to World) format
+        new_poses = np.stack(new_poses, axis=0)
+        new_poses[:, :, 0] = -new_poses[:, :, 0]
+        new_poses[:, :, 2] = -new_poses[:, :, 2]
+        new_poses = np.concatenate([new_poses, np.zeros((num_poses, 1, 4))], axis=1)
+        new_poses[:, 3, 3] = 1.0
+        return torch.from_numpy(new_poses).float(), render_camera_idx
