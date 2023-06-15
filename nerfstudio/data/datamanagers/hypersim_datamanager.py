@@ -88,9 +88,10 @@ class HyperSimDataManager(VanillaDataManager):  # pylint: disable=abstract-metho
             labels=self.config.labels, test_tuning=False, pregen_random_views=False,
             on_the_fly_random_views=False)
 
-    def generate_random_views(self, num_views: int) -> Dict:
+    def generate_random_views(self, num_views: int, epoch: int) -> Dict:
         """Generate random views for training.
         Args:
-            num_views: number of random views to generate
+            num_views: number of random views to generate,
+            epoch: current epoch number
         """
-        return self.train_dataset.generate_random_views(num_views)
+        return self.train_dataset.generate_random_views(num_views, epoch)

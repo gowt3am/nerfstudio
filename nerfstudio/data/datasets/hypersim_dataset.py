@@ -352,20 +352,23 @@ class HyperSimDataset(InputDataset):
             # Creating batches (bs) of pointclouds in PyTorch3D (here bs = 1)
             P_world_flat = rearrange(P_world, "c hw -> 1 hw c")
             img2_flat = rearrange(img2, "h w c -> 1 (h w) c")
-            self.all_points[2*j] = P_world_flat
-            self.all_colors[2*j] = img2_flat
+            self.all_points[2*j] = P_world_flat.cpu()
+            self.all_colors[2*j] = img2_flat.cpu()
 
             # White mask for knowing invalid points (and filtering only them)
-            self.all_points[2*j + 1] = P_world_flat
-            self.all_colors[2*j + 1] = torch.ones_like(img2_flat)
+            self.all_points[2*j + 1] = P_world_flat.cpu()
+            self.all_colors[2*j + 1] = torch.ones_like(img2_flat).cpu()
         self.rand_indices = [x + len(self.img_filenames) for x in np.random.choice(self.num_random_views, 50, replace=False)] 
         self.rand_poses = self.gen_poses[self.rand_indices]
     
-    def generate_random_views(self, num_views: int) -> Dict:
+    def generate_random_views(self, num_views: int, epoch: int) -> Dict:
         """Generate random views of gen_poses on the fly from training images"""
-        # Randomly sample num_views random poses from gen_poses
-        self.rand_indices = [x + len(self.img_filenames) for x in np.random.choice(self.num_random_views, num_views, replace=False)]
         
+        # # Randomly sample num_views random poses from gen_poses
+        # self.rand_indices = [x + len(self.img_filenames) for x in np.random.choice(self.num_random_views, num_views, replace=False)]
+        # Use epoch to sample num_views in ordered fashion [Useful for slowly increasing poses]
+        self.rand_indices = [x + len(self.img_filenames) for x in np.arange(epoch*num_views, (epoch+1)*num_views, 1)]
+
         self.rand_poses = self.gen_poses[self.rand_indices]
         self.rendered_images = []
         self.rendered_masks = []

@@ -436,7 +436,8 @@ class VanillaDataManager(DataManager, Generic[TDataset]):  # pylint: disable=abs
         elif self.on_the_fly_random_views:
             self.train_dataparser_outputs = self.dataparser.get_dataparser_outputs(
                                             split="train", on_the_fly_random_views=True,
-                                            num_total_random_poses=self.num_total_random_poses)
+                                            num_total_random_poses=self.num_total_random_poses,
+                                            num_random_views_per_batch=self.num_random_views_per_batch)
         else:
             self.train_dataparser_outputs = self.dataparser.get_dataparser_outputs(
                                             split="train")
