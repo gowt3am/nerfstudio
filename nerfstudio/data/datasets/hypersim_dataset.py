@@ -364,10 +364,10 @@ class HyperSimDataset(InputDataset):
     def generate_random_views(self, num_views: int, epoch: int) -> Dict:
         """Generate random views of gen_poses on the fly from training images"""
         
-        # # Randomly sample num_views random poses from gen_poses
-        # self.rand_indices = [x + len(self.img_filenames) for x in np.random.choice(self.num_random_views, num_views, replace=False)]
-        # Use epoch to sample num_views in ordered fashion [Useful for slowly increasing poses]
-        self.rand_indices = [x + len(self.img_filenames) for x in np.arange(epoch*num_views, (epoch+1)*num_views, 1)]
+        # Randomly sample num_views random poses from gen_poses
+        self.rand_indices = [x + len(self.img_filenames) for x in np.random.choice(self.num_random_views, num_views, replace=False)]
+        # # Use epoch to sample num_views in ordered fashion [Useful for slowly increasing poses]
+        # self.rand_indices = [x + len(self.img_filenames) for x in np.arange(epoch*num_views, (epoch+1)*num_views, 1)]
 
         self.rand_poses = self.gen_poses[self.rand_indices]
         self.rendered_images = []

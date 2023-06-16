@@ -74,6 +74,8 @@ class HyperSimDataParserConfig(DataParserConfig):
     """Image height"""
     width: int = 1024
     """Image width"""
+    random_renders_directory: str = "no_filt_rendered_cam_00"
+    """Directory containing random renders for pregen_random_views"""
 
 @dataclass
 class HyperSim(DataParser):
@@ -102,27 +104,29 @@ class HyperSim(DataParser):
                 x.split('.')[0] + '/frame.' + x.split('.')[-1] + '.color.png' for x in img_ids]
             self.all_gen_mask_names = [str(self.config.data) + '/images/no_filt_rendered_' +
                 x.split('.')[0] + '/frame.' + x.split('.')[-1] + '.valid.png' for x in img_ids]
-            self.all_gen_poses = self.poses.copy()
+            self.all_gen_poses = self.poses.clone()
         elif self.use_pregen_random_views:
             self.num_total_random_poses = len(list((self.config.data / 'images'
-                                              / 'random_renders').rglob("*.png"))) // 2
+                                              / self.config.random_renders_directory).rglob("*.png"))) // 2
             img_ids = ['{:04d}'.format(x) for x in range(self.num_total_random_poses)]
             self.gen_image_names = [None]*len(self.all_image_names) + [
-                str(self.config.data) + '/images/random_renders2/frame.' + x + '.color.png' for x in img_ids]
+                str(self.config.data) + f'/images/{self.config.random_renders_directory}/frame.' + x + '.color.png' for x in img_ids]
             self.gen_mask_names = [None]*len(self.all_image_names) + [
-                str(self.config.data) + '/images/random_renders2/frame.' + x + '.valid.png' for x in img_ids]
+                str(self.config.data) + f'/images/{self.config.random_renders_directory}/frame.' + x + '.valid.png' for x in img_ids]
             self.gen_poses = torch.from_numpy(np.load(self.config.data / 'images'
-                                    / 'random_renders2' / 'random_poses.npy')).float()
+                                    / f'{self.config.random_renders_directory}' / 'random_poses.npy')).float()
             self.gen_poses = torch.cat((self.poses, self.gen_poses), dim=0)
             self.poses = self.gen_poses.clone()
         elif self.use_on_the_fly_random_views:
             self.gen_image_names = None
             self.gen_mask_names = None
-            # self.gen_poses = self.generate_all_random_poses(self.poses, num_poses=self.num_total_random_poses)
+
+            self.gen_poses, self.nearest_cam_ids = self.generate_all_random_poses(self.poses, num_poses=self.num_total_random_poses)
             # self.gen_poses, self.nearest_cam_ids = self.generate_all_random_poses_sparf(self.poses, num_poses=self.num_total_random_poses)
-            # self.nearest_cam_ids = np.concatenate((np.arange(self.poses.shape[0]), self.nearest_cam_ids))
-            self.gen_poses, self.nearest_cam_ids = self.generate_all_random_poses_slowly_increasing(self.poses,
-                num_poses=self.num_total_random_poses, num_trajectories=self.num_random_views_per_batch)
+            # self.gen_poses, self.nearest_cam_ids = self.generate_all_random_poses_slowly_increasing(self.poses,
+            #     num_poses=self.num_total_random_poses, num_trajectories=self.num_random_views_per_batch)
+            
+            self.nearest_cam_ids = np.concatenate((np.arange(self.poses.shape[0]), self.nearest_cam_ids))
             self.gen_poses = torch.cat((self.poses, self.gen_poses), dim=0).cuda()
             self.poses = self.gen_poses.clone()
         else:
@@ -435,11 +439,10 @@ class HyperSim(DataParser):
             origin1 = all_origins[idx1]
             origin2 = all_origins[idx2]
             new_origins = ratios[:, None] * origin1 + (1 - ratios[:, None]) * origin2
-
-            z_axis1 = all_z_axes[idx1]
-            z_axis2 = all_z_axes[idx2]
-            new_z_axes = ratios[:, None] * z_axis1 + (1 - ratios[:, None]) * z_axis2
-            return new_origins, new_z_axes
+            new_lookats = np.where(ratios[:, None] < 0.5, all_lookat[idx2], all_lookat[idx1])
+            new_z_axes = new_lookats - new_origins
+            nearest_idxs = np.where(ratios < 0.5, idx2, idx1)
+            return new_origins, new_z_axes, nearest_idxs
         
         def normalize(x):
             """Normalization helper function."""
@@ -456,7 +459,7 @@ class HyperSim(DataParser):
         new_poses = []
         new_ups = sample_new_ups(num_poses)
         # new_origins, new_z_axes = spread_out_sample_new_origin_and_z_axes(num_poses)
-        new_origins, new_z_axes = closeby_sample_new_origin_and_z_axes(num_poses)
+        new_origins, new_z_axes, render_camera_idx = closeby_sample_new_origin_and_z_axes(num_poses)
         for i in range(num_poses):
             new_poses.append(viewmatrix(new_z_axes[i], new_ups[i], new_origins[i]))
         
@@ -467,7 +470,7 @@ class HyperSim(DataParser):
         new_poses[:, :, 2] = -new_poses[:, :, 2]
         new_poses = np.concatenate([new_poses, np.zeros((num_poses, 1, 4))], axis=1)
         new_poses[:, 3, 3] = 1.0
-        return torch.from_numpy(new_poses).float()
+        return torch.from_numpy(new_poses).float(), render_camera_idx
     
     def generate_all_random_poses_sparf(self, poses: TensorType, num_poses: int = 1500):
         """Generate all random poses similar to SPARF that will be used for training"""
@@ -541,7 +544,8 @@ class HyperSim(DataParser):
     
         # Use Pytorch3D sample_farthest_points to sample num_trajectories points
         chosen_origins1, idx1 = pytorch3d.ops.sample_farthest_points(
-                                torch.from_numpy(all_origins).unsqueeze(0), num_trajectories)
+                                points=torch.from_numpy(all_origins).unsqueeze(0),
+                                lengths=None, K=num_trajectories)
         chosen_origins1 = chosen_origins1.squeeze(0).numpy()
         idx1 = idx1.squeeze(0).numpy()
         chosen_lookat1 = all_lookat[idx1].copy()
@@ -573,13 +577,13 @@ class HyperSim(DataParser):
             m = np.stack([vec0, vec1, vec2, position], axis=1)
             return m
         
-        new_poses = np.zeros((num_poses, 3, 3))
+        new_poses = np.zeros((num_poses, 3, 4))
         render_camera_idx = np.zeros((num_poses), dtype=np.int32)
         num_views_per_trajectory = num_poses // num_trajectories
         for i in range(num_trajectories):
             # Sample num_per_trajectory points along the line between chosen_origins1 and end_points
             ratios = np.linspace(0, 1, num_views_per_trajectory)
-            new_origins = ratios[:, None] * chosen_origins1[i] + (1 - ratios[:, None]) * end_points[i]
+            new_origins = (1 - ratios[:, None]) * chosen_origins1[i] + ratios[:, None] * end_points[i]
             new_ups = np.repeat(chosen_ups1[i][None, :], num_views_per_trajectory, axis=0)
             new_lookats = np.repeat(chosen_lookat1[i][None, :], num_views_per_trajectory, axis=0)
             new_z_axes = new_lookats - new_origins
