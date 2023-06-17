@@ -406,13 +406,15 @@ class ManhattanNerfactoModel(Model):
         metrics_dict = {}
         if self.training:
             if self.test_tuning or self.pregen_random_views:
+                if self.test_tuning:
+                    tgt = batch["pregenerated"].to(self.device)
+                else:
+                    tgt = batch["image"].to(self.device)
                 if self.config.use_affine_illumination_modeling:
                     indices = batch["indices"].to(self.device)
                     a = self.alpha[indices[:, 0]].unsqueeze(1)
                     b = self.beta[indices[:, 0]].unsqueeze(1)
-                    tgt = a * batch["pregenerated"].to(self.device) + b
-                else:
-                    tgt = batch["pregenerated"].to(self.device)
+                    tgt = a * tgt + b
             elif self.on_the_fly_random_views:
                 if self.config.use_affine_illumination_modeling:
                     indices = [self.rand_indices_dict[x] for x in batch["indices"][:, 0].cpu().numpy()]
@@ -446,15 +448,17 @@ class ManhattanNerfactoModel(Model):
         loss_dict = {}
         if self.training:
             if self.test_tuning or self.pregen_random_views:
+                if self.test_tuning:
+                    tgt = batch["pregenerated"].to(self.device)
+                else:
+                    tgt = batch["image"].to(self.device)
                 if self.config.use_affine_illumination_modeling:
                     indices = batch["indices"].to(self.device)
                     a = self.alpha[indices[:, 0]].unsqueeze(1)
                     b = self.beta[indices[:, 0]].unsqueeze(1)
-                    tgt = a * batch["pregenerated"].to(self.device) + b
+                    tgt = a * tgt + b
                     # Adding a normalizing loss term to keep alpha and beta close to 1, 0
                     loss_dict["alpha_beta"] = 0.01 * (torch.mean(torch.abs(a - 1.0)) + torch.mean(torch.abs(b)))
-                else:
-                    tgt = batch["pregenerated"].to(self.device)
             elif self.on_the_fly_random_views:
                 if self.config.use_affine_illumination_modeling:
                     indices = [self.rand_indices_dict[x] for x in batch["indices"][:, 0].cpu().numpy()]

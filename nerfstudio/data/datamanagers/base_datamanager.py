@@ -498,6 +498,10 @@ class VanillaDataManager(DataManager, Generic[TDataset]):  # pylint: disable=abs
         assert self.train_dataset is not None
         CONSOLE.print("Setting up training dataset...")
         if self.pregen_random_views or self.on_the_fly_random_views:
+            self.num_random_views_per_batch = min(self.num_random_views_per_batch, \
+                                                  self.train_dataset.num_random_views) \
+                                                if self.train_dataset.num_random_views > 0 \
+                                                else self.num_random_views_per_batch
             self.train_image_dataloader = MixedDataloader(
                 self.train_dataset,
                 num_random_images_to_sample_from=self.num_random_views_per_batch,
