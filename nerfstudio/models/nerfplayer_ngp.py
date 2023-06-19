@@ -166,7 +166,7 @@ class NerfplayerNGPModel(NGPModel):
             ),
         ]
 
-    def get_outputs(self, ray_bundle: RayBundle, **kwargs):
+    def get_outputs(self, ray_bundle: RayBundle, batch, **kwargs):
         num_rays = len(ray_bundle)
 
         with torch.no_grad():

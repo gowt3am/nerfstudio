@@ -80,13 +80,14 @@ class HyperSimDataManager(VanillaDataManager):  # pylint: disable=abstract-metho
                                scale_factor=self.config.camera_res_scale_factor,
                                labels=self.config.labels, test_tuning=self.test_tuning,
                                pregen_random_views=self.pregen_random_views,
-                               on_the_fly_random_views=self.on_the_fly_random_views)
+                               on_the_fly_random_views=self.on_the_fly_random_views,
+                               rendered_depth_new_views=self.rendered_depth_new_views)
 
     def create_eval_dataset(self) -> HyperSimDataset:
         return HyperSimDataset(dataparser_outputs=self.dataparser.get_dataparser_outputs(
             split=self.test_split), scale_factor=self.config.camera_res_scale_factor,
             labels=self.config.labels, test_tuning=False, pregen_random_views=False,
-            on_the_fly_random_views=False)
+            on_the_fly_random_views=False, rendered_depth_new_views=False)
 
     def generate_random_views(self, num_views: int, epoch: int) -> Dict:
         """Generate random views for training.

@@ -411,14 +411,18 @@ class VanillaDataManager(DataManager, Generic[TDataset]):  # pylint: disable=abs
         self.sampler = None
         self.test_mode = test_mode
         self.test_split = "test" if test_mode in ["test", "inference"] else "val"
-        self.test_tuning = kwargs["test_tuning"]
-        self.pregen_random_views = kwargs["pregen_random_views"]
-        self.on_the_fly_random_views = kwargs["on_the_fly_random_views"]
-        self.num_total_random_poses = kwargs["num_total_random_poses"]
-        self.num_random_views_per_batch = kwargs["num_random_views_per_batch"]
-        self.config.train_num_times_to_repeat_images = kwargs.get("new_views_every_iters",
-                                            self.config.train_num_times_to_repeat_images)
+        self.test_tuning = kwargs.get("test_tuning", False)
+        self.pregen_random_views = kwargs.get("pregen_random_views", False)
+        self.on_the_fly_random_views = kwargs.get("on_the_fly_random_views", False)
+        self.rendered_depth_new_views = kwargs.get("rendered_depth_new_views", False)
+        self.num_total_random_poses = kwargs.get("num_total_random_poses", 1500)
+        self.num_random_views_per_batch = kwargs.get("num_random_views_per_batch", 50)
 
+        self.config.train_num_times_to_repeat_images = kwargs.get("new_views_every_iters",
+                                        self.config.train_num_times_to_repeat_images)
+        self.config.train_num_images_to_sample_from = 1 if self.rendered_depth_new_views \
+                                        else self.config.train_num_images_to_sample_from
+        
         self.dataparser_config = self.config.dataparser
         if self.config.data is not None:
             self.config.dataparser.data = Path(self.config.data)
@@ -439,8 +443,7 @@ class VanillaDataManager(DataManager, Generic[TDataset]):  # pylint: disable=abs
                                             num_total_random_poses=self.num_total_random_poses,
                                             num_random_views_per_batch=self.num_random_views_per_batch)
         else:
-            self.train_dataparser_outputs = self.dataparser.get_dataparser_outputs(
-                                            split="train")
+            self.train_dataparser_outputs = self.dataparser.get_dataparser_outputs(split="train")
 
         self.train_dataset = self.create_train_dataset()
         self.eval_dataset = self.create_eval_dataset()

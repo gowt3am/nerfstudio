@@ -71,6 +71,7 @@ class CacheDataloader(DataLoader):
         self.first_time = True
 
         self.cached_collated_batch = None
+        self.all_dataset_indices = range(len(self.dataset))
         if self.cache_all_images:
             CONSOLE.print(f"Caching all {len(self.dataset)} images.")
             if len(self.dataset) > 500:
@@ -114,7 +115,10 @@ class CacheDataloader(DataLoader):
 
     def _get_collated_batch(self):
         """Returns a collated batch."""
-        batch_list = self._get_batch_list()
+        if self.num_images_to_sample_from == 1:
+            batch_list = [self.dataset.__getitem__(random.choice(self.all_dataset_indices))]
+        else:
+            batch_list = self._get_batch_list()
         collated_batch = self.collate_fn(batch_list)
         collated_batch = get_dict_to_torch(collated_batch, device=self.device, exclude=["image"])
         return collated_batch

@@ -215,10 +215,12 @@ class VanillaPipelineConfig(cfg.InstantiateConfig):
     """Whether we are using randomly pre-generated views for training"""
     on_the_fly_random_views: bool = False
     """Whether we are using randomly generating views on-the-fly for training"""
-    new_views_every_iters: int = 1000
+    rendered_depth_new_views: bool = False
+    """Whether we are on-the-fly generating new views using rendered depth and backpropagating"""
+    new_views_every_iters: int = 1
     """How often to generate new random views for training"""
     num_random_views: int = 50
-    """How many random views to use for a batch of training"""
+    """How many random views to use for a batch of training, will be 1 for rendered_depth_new_view"""
 
 
 class VanillaPipeline(Pipeline):
@@ -257,7 +259,8 @@ class VanillaPipeline(Pipeline):
             on_the_fly_random_views=self.config.on_the_fly_random_views,
             num_total_random_poses=self.config.num_random_views*max_num_iterations//self.config.new_views_every_iters,
             num_random_views_per_batch=self.config.num_random_views,
-            new_views_every_iters=self.config.new_views_every_iters
+            new_views_every_iters=self.config.new_views_every_iters,
+            rendered_depth_new_views=self.config.rendered_depth_new_views,
         )
         self.datamanager.to(device)
         # TODO(ethan): get rid of scene_bounds from the model
@@ -272,6 +275,7 @@ class VanillaPipeline(Pipeline):
             pregen_random_views=self.config.pregen_random_views,
             on_the_fly_random_views=self.config.on_the_fly_random_views,
             num_random_views=self.config.num_random_views,
+            rendered_depth_new_views=self.config.rendered_depth_new_views,
         )
         self.model.to(device)
 
@@ -298,7 +302,7 @@ class VanillaPipeline(Pipeline):
             rand_indices = self.datamanager.generate_random_views(self.config.num_random_views, epoch=step // self.config.new_views_every_iters)
             self.model.reset_illumination_parameters(rand_indices)
         ray_bundle, batch = self.datamanager.next_train(step)
-        model_outputs = self.model(ray_bundle)
+        model_outputs = self.model(ray_bundle, batch)
         metrics_dict = self.model.get_metrics_dict(model_outputs, batch)
 
         if self.config.datamanager.camera_optimizer is not None:
@@ -333,7 +337,7 @@ class VanillaPipeline(Pipeline):
         """
         self.eval()
         ray_bundle, batch = self.datamanager.next_eval(step)
-        model_outputs = self.model(ray_bundle)
+        model_outputs = self.model(ray_bundle, batch)
         metrics_dict = self.model.get_metrics_dict(model_outputs, batch)
         loss_dict = self.model.get_loss_dict(model_outputs, batch, step, metrics_dict)
         self.train()

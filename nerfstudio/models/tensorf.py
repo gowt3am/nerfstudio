@@ -268,7 +268,7 @@ class TensoRFModel(Model):
 
         return param_groups
 
-    def get_outputs(self, ray_bundle: RayBundle, **kwargs):
+    def get_outputs(self, ray_bundle: RayBundle, batch, **kwargs):
         # uniform sampling
         ray_samples_uniform = self.sampler_uniform(ray_bundle)
         dens = self.field.get_density(ray_samples_uniform)

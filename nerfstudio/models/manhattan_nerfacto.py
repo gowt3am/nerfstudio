@@ -22,7 +22,9 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Type
 
 import numpy as np
+import random
 import torch
+from torchtyping import TensorType
 from torch.nn import Parameter
 from torchmetrics import (
     PeakSignalNoiseRatio,
@@ -32,7 +34,10 @@ from torchmetrics import (
 from torchmetrics.functional import structural_similarity_index_measure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from typing_extensions import Literal
+from einops import rearrange
 
+from nerfstudio.cameras.cameras import Cameras, CameraType
+from nerfstudio.cameras.camera_optimizers import CameraOptimizerConfig
 from nerfstudio.cameras.rays import RayBundle
 from nerfstudio.engine.callbacks import (
     TrainingCallback,
@@ -54,6 +59,7 @@ from nerfstudio.model_components.losses import (
     orientation_loss,
     pred_normal_loss,
 )
+from nerfstudio.model_components.ray_generators import RayGenerator
 from nerfstudio.model_components.ray_samplers import (
     ProposalNetworkSampler,
     UniformSampler,
@@ -186,8 +192,15 @@ class ManhattanNerfactoModel(Model):
         self.test_tuning = self.kwargs["test_tuning"]
         self.pregen_random_views = self.kwargs["pregen_random_views"]
         self.on_the_fly_random_views = self.kwargs["on_the_fly_random_views"]
+        self.rendered_depth_new_views = self.kwargs["rendered_depth_new_views"]
         self.num_test_data = self.kwargs["num_test_data"]
         self.num_random_views = self.kwargs["num_random_views"]
+        self.K = torch.tensor([[self.metadata["fx"], 0, self.metadata["cx"]],
+                               [0, self.metadata["fy"], self.metadata["cy"]],
+                               [0, 0, 1]]).to(self.device)
+        self.H = self.metadata["H"]
+        self.W = self.metadata["W"]
+        self.distance_to_z = self.distance_to_zdepth()
 
         if self.config.disable_scene_contraction:
             scene_contraction = None
@@ -344,7 +357,7 @@ class ManhattanNerfactoModel(Model):
             )
         return callbacks
 
-    def get_outputs(self, ray_bundle: RayBundle, **kwargs):
+    def get_outputs(self, ray_bundle: RayBundle, batch, **kwargs):
         ray_samples, weights_list, ray_samples_list = self.proposal_sampler(ray_bundle, density_fns=self.density_fns)
         field_outputs = self.field(ray_samples, compute_normals=True)
         weights = ray_samples.get_weights(field_outputs[FieldHeadNames.DENSITY])
@@ -400,6 +413,26 @@ class ManhattanNerfactoModel(Model):
         for i in range(self.config.num_proposal_iterations):
             outputs[f"prop_depth_{i}"] = self.renderer_depth(weights=weights_list[i], ray_samples=ray_samples_list[i])
 
+        if self.training and batch is not None:
+            rand_pose = self.sparf_pose_interpolation(batch["pose"], batch["closest_pose"])
+            # Batch project RGBD from batch["image"] & outputs["depth"] from batch["pose"] to rand_pose
+            dst_indices, mask = self.warp_rgbd_to_new_pose(batch["indices"], outputs["depth"], batch["pose"], rand_pose)
+            rgb_tgt = batch["rgb"][mask].to(self.device)
+            
+            # Generate rays for rand_pose camera, forward propagate through field and render its RGB
+            dst_indices = dst_indices[mask].to(self.device)
+            dst_ray_bundle = self.ray_generator(dst_indices, rand_pose)
+
+            # Forward propagate through field and render its RGB
+            ray_samples, weights_list, ray_samples_list = self.proposal_sampler(dst_ray_bundle, density_fns=self.density_fns)
+            field_outputs = self.field(ray_samples, compute_normals=True)
+            weights = ray_samples.get_weights(field_outputs[FieldHeadNames.DENSITY])
+            weights_list.append(weights)
+            ray_samples_list.append(ray_samples)
+            rgb = self.renderer_rgb(rgb=field_outputs[FieldHeadNames.RGB], weights=weights)
+            # depth = self.renderer_depth(weights=weights, ray_samples=ray_samples)
+            # accumulation = self.renderer_accumulation(weights=weights)
+            outputs["rand_rgb_loss"] = self.rgb_loss(rgb_tgt, rgb)
         return outputs
 
     def get_metrics_dict(self, outputs, batch):
@@ -491,6 +524,8 @@ class ManhattanNerfactoModel(Model):
             loss_dict["orientation_loss"] = self.config.orientation_loss_mult * torch.mean(outputs["rendered_orientation_loss"])
         
         if self.training:
+            if "rand_rgb_loss" in outputs:
+                loss_dict["rand_rgb_loss"] = outputs["rand_rgb_loss"]
             loss_dict["interlevel_loss"] = self.config.interlevel_loss_mult * interlevel_loss(
                 outputs["weights_list"], outputs["ray_samples_list"]
             )
@@ -573,3 +608,110 @@ class ManhattanNerfactoModel(Model):
                         param.copy_(torch.ones(self.num_random_views))
                     elif 'beta' in name:
                         param.copy_(torch.zeros(self.num_random_views))
+    
+    def normalize(self, x):
+        """Normalization helper function."""
+        return x / torch.norm(x, dim=-1, keepdim=True)
+
+    def viewmatrix(self, lookdir: TensorType, up: TensorType,
+                   position: TensorType, subtract_position: bool = False):
+        """Construct lookat view matrix."""
+        vec2 = self.normalize((lookdir - position) if subtract_position else lookdir)
+        vec0 = self.normalize(np.cross(up, vec2))
+        vec1 = self.normalize(np.cross(vec2, vec0))
+        m = torch.stack([vec0, vec1, vec2, position], dim=1)
+        return m
+
+    def sparf_pose_interpolation(self, pose1: TensorType[4, 4],
+                            pose2: TensorType[4, 4]) -> TensorType[4, 4]:
+        # Poses are in Right-Up-Back (Cam 2 World) format
+        origin1 = pose1[:3, 3]
+        up1 = pose1[:3, 1]
+        z1 = -pose1[:3, 2]
+        lookat1 = origin1 + z1
+        origin2 = pose2[:3, 3]
+        up2 = pose2[:3, 1]
+        
+        ratio = random.uniform(0.0, 1.0) 
+        new_origin = ratio * origin1 + (1 - ratio) * origin2
+        new_up = ratio * up1 + (1 - ratio) * up2
+        new_lookat = lookat1
+        new_z_axes = new_lookat - new_origin
+
+        new_pose = self.viewmatrix(new_z_axes, new_up, new_origin)
+        new_pose = torch.concat([new_pose, torch.zeros((1, 4))], axis=1)
+        new_pose[3, 3] = 1.0
+        return new_pose.float()
+    
+    def invert_transform(self, transform: TensorType[3, 4]) -> TensorType[3, 4]:
+        R = transform[:3, :3]
+        t = transform[:3, 3]
+        R_inv = R.T
+        t_inv = -R.T @ t
+        return torch.concat([R_inv, t_inv], axis=1)
+
+    def distance_to_zdepth(self) -> TensorType:
+        w_lim_min = (-0.5 * self.W) + 0.5
+        w_lim_max = (0.5 * self.W) - 0.5
+        im_plane_X = np.linspace(w_lim_min, w_lim_max, self.W)
+        im_plane_X = im_plane_X.reshape(1, self.W).repeat(self.H, 0)
+        im_plane_X = im_plane_X.astype(np.float32)[:, :, None]
+        h_lim_min = (-0.5 * self.H) + 0.5
+        h_lim_max = (0.5 * self.H) - 0.5
+        im_plane_Y = np.linspace(h_lim_min, h_lim_max, self.H)
+        im_plane_Y = im_plane_Y.reshape(self.H, 1).repeat(self.W, 1)
+        im_plane_Y = im_plane_Y.astype(np.float32)[:, :, None]
+        im_plane_Z = np.full([self.H, self.W, 1], self.metadata["fx"], np.float32)
+        im_plane = np.concatenate([im_plane_X, im_plane_Y, im_plane_Z], 2)
+        im_plane_norm2_inv = 1.0 / np.linalg.norm(im_plane, 2, 2)
+        return torch.from_numpy(im_plane_norm2_inv * self.metadata["fx"]).to(self.device)
+
+    def warp_rgbd_to_new_pose(self, ray_indices: TensorType, src_distance: TensorType,
+            src_pose: TensorType, dst_pose: TensorType) -> Tuple[TensorType, TensorType]:
+        """Warp depth-map from src_pose to dst_pose, at indices of src_pose image"""
+        image_coords = torch.meshgrid(torch.arange(1024), torch.arange(768), indexing="ij")
+        image_coords = torch.stack(image_coords, dim=-1) + 0.5          # (W, H, 2)
+
+        c = ray_indices[:, 0]  # camera indices
+        y = ray_indices[:, 1]  # row indices
+        x = ray_indices[:, 2]  # col indices
+        coords = image_coords[x, y]
+        coords = coords.cuda()                                          # (N, 2)
+        
+        src_pose = src_pose.cuda()
+        dst_pose = dst_pose.cuda()
+        R_src = src_pose[:3, :3]            # (3, 3) in Right-Up-Back (Cam 2 World) format
+        t_src = src_pose[:3, 3]             # (3, 1) in Right-Up-Back (Cam 2 World) format
+        dst_pose_inv = self.invert_transform(dst_pose)
+        R_dst = dst_pose_inv[:3, :3]        # (3, 3) in Right-Up-Back (World 2 Cam) format
+        t_dst = dst_pose_inv[:3, 3]         # (3, 1) in Right-Up-Back (World 2 Cam) format
+
+        distance_to_z_conversion = self.distance_to_z[y, x]
+        src_depth = src_distance * distance_to_z_conversion            # (N)
+        P_src = src_depth.T * (torch.inverse(self.K) @ coords.T)       # (3, N)
+        P_src[2, :] *= -1                   # Not sure if we need this -1 factor
+        P_world = (R_src @ P_src + t_src[:, None])
+        P_dst = (R_dst @ P_world + t_dst[:, None])                     # (3, N)
+        dst_depth = P_dst[2, :]                                        # (N)
+
+        uv_dst = self.K @ (P_dst / P_dst[2, :])                    # (3, N)
+        uv_dst = uv_dst[:2, :] / uv_dst[2, :]                      # (2, N)
+        
+        # Create a mask for valid pixels
+        valid_mask = (uv_dst[0, :] >= 0) & (uv_dst[0, :] < self.W) &\
+                     (uv_dst[1, :] >= 0) & (uv_dst[1, :] < self.H) &\
+                     (dst_depth > 0)                               # (N)
+        
+        # Return indices as (cam(0), row, col)
+        return torch.stack([torch.zeros(uv_dst.shape[1]), uv_dst[1, :], uv_dst[0, :]], dim=1), valid_mask
+    
+    def ray_generator(self, indices: TensorType, pose: TensorType) -> RayBundle:
+        """ Create a camera at pose, and use indices to create RayBundle object"""
+        camera = Cameras(fx=self.metadata["fx"], fy=self.metadata["fy"],
+                         cx=self.metadat["cx"], cy=self.metadata["cy"],
+                         height=self.H, width=self.W,
+                         camera_to_worlds=pose[:3, :4].unsqueeze(0),
+                         camera_type=CameraType.PERSPECTIVE).to(self.device)
+        cam_pose_optim = CameraOptimizerConfig().setup(1, device=self.device)
+        ray_generator = RayGenerator(camera, cam_pose_optim)
+        return ray_generator(indices)

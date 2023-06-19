@@ -46,12 +46,13 @@ class HyperSimDataset(InputDataset):
     """
     def __init__(self, dataparser_outputs: DataparserOutputs, scale_factor: float = 1.0,
                  labels: List[str] = [], test_tuning: bool = False, pregen_random_views: bool = False,
-                 on_the_fly_random_views: bool = False):
+                 on_the_fly_random_views: bool = False, rendered_depth_new_views: bool = False):
         super().__init__(dataparser_outputs, scale_factor)
         self.labels = labels
         self.test_tuning = test_tuning
         self.pregen_random_views = pregen_random_views
         self.on_the_fly_random_views = on_the_fly_random_views
+        self.rendered_depth_new_views = rendered_depth_new_views
         
         self.img_filenames = dataparser_outputs.image_filenames
         self.depth_filenames = self.metadata["depth_filenames"]
@@ -69,6 +70,8 @@ class HyperSimDataset(InputDataset):
         self.W_orig = self.metadata["W_orig"]
         self.H = int(self.H_orig * scale_factor)
         self.W = int(self.W_orig * scale_factor)
+        self.metadata["H"] = self.H
+        self.metadata["W"] = self.W
         self.xyz_min = self.metadata["xyz_min"]
         self.xyz_max = self.metadata["xyz_max"]
         self.scene_boundary = self.metadata["scene_boundary"]
@@ -94,6 +97,10 @@ class HyperSimDataset(InputDataset):
             self.num_random_views = self.gen_poses.shape[0] - len(self.img_filenames)
             self.labels = labels + ["mask", "pose"]
             self.prepare_random_view_generation()
+        elif self.rendered_depth_new_views:
+            print(f"Rendering new views from rendered depth is enabled")
+            self.labels = labels + ["pose", "closest_pose"]
+            self.find_closest_poses()
 
     def get_image(self, image_idx: int) -> TensorType["image_height", "image_width", "num_channels"]:
         """Load image, apply tonemapping, rescale it and return 3-channel float32 tensor.
@@ -187,7 +194,6 @@ class HyperSimDataset(InputDataset):
             elif label == 'mask':
                 content = F.interpolate(torch.unsqueeze(content, dim = 0).float(),
                     size = self.new_size, mode='nearest').squeeze(0).type(content.dtype)
-                
         return content
 
     def get_metadata(self, data: Dict) -> Dict:
@@ -256,11 +262,13 @@ class HyperSimDataset(InputDataset):
                 content[np.isnan(np.abs(content).sum(axis=-1))] = 1.0
             elif label == "pose":
                 content = self.gen_poses[image_idx]
+            elif label == "closest_pose":
+                content = self.closest_poses[image_idx]
             else:
                 raise NotImplementedError(f"Label {label} is not implemented")
             
             assert content is not None, f"Content for label {label} is unavailable"
-            if label == "pose":
+            if label == "pose" or label == "closest_pose":
                 metadata[label] = content
             elif label == "depth":
                 metadata[label] = self._downscale_content(content, label)
@@ -292,6 +300,24 @@ class HyperSimDataset(InputDataset):
             self.all_depths = all_depths
         # Scale depth with respect to scene scaling factor (calculated in dataparser)
         self.all_depths *= self._dataparser_outputs.dataparser_scale
+
+    def find_closest_poses(self):
+        """For all poses, find the closest pose from trainset"""
+        self.closest_poses = []
+        for i in range(self.gen_poses.shape[0]):
+            tgt_pose = self.gen_poses[i]
+            t_gt_np = tgt_pose[:3, 3].numpy()
+            distances_to_gt = []
+            for idx in range(self.gen_poses.shape[0]):
+                if idx != i:
+                    t1 = self.gen_poses[idx].numpy()[:3, 3]
+                    distances_to_gt.append(np.linalg.norm(t1 - t_gt_np))
+                else:
+                    distances_to_gt.append(np.inf)
+            distances_to_gt = np.array(distances_to_gt)
+            closest_idx = np.argsort(distances_to_gt)[0]
+            self.closest_poses.append(self.gen_poses[closest_idx])
+        self.closest_poses = torch.from_numpy(np.array(self.closest_poses))
 
     def __get_pregen_rand_item__(self, image_idx: int) -> Dict:
         data = {"image_idx": image_idx}

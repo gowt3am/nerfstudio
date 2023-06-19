@@ -95,7 +95,7 @@ class MipNerfModel(Model):
         param_groups["fields"] = list(self.field.parameters())
         return param_groups
 
-    def get_outputs(self, ray_bundle: RayBundle, **kwargs):
+    def get_outputs(self, ray_bundle: RayBundle, batch, **kwargs):
         if self.field is None:
             raise ValueError("populate_fields() must be called before get_outputs")
 

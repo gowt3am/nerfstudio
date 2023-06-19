@@ -95,16 +95,17 @@ class HyperSim(DataParser):
         self._rescale_scene_with_boundary()
 
         self.nearest_cam_ids = None
+        self.gen_image_names = None
+        self.gen_mask_names = None
+        self.gen_poses = self.poses.clone()
         if self.test_tuning:
-            # Reconstructed images and masks are numbered from 0 to len(val_data),
-            # so different naming convention
+            # Reconstructed images and masks are numbered from 0 to len(val_data), so different naming convention
             img_ids = [x.split('.')[0] + '.{:04d}'.format(y) for (x, y) in
                                     zip(self.img_ids, range(len(self.img_ids)))]
             self.gen_image_names = [str(self.config.data) + '/images/no_filt_rendered_' +
                 x.split('.')[0] + '/frame.' + x.split('.')[-1] + '.color.png' for x in img_ids]
-            self.all_gen_mask_names = [str(self.config.data) + '/images/no_filt_rendered_' +
+            self.gen_mask_names = [str(self.config.data) + '/images/no_filt_rendered_' +
                 x.split('.')[0] + '/frame.' + x.split('.')[-1] + '.valid.png' for x in img_ids]
-            self.all_gen_poses = self.poses.clone()
         elif self.use_pregen_random_views:
             self.num_total_random_poses = len(list((self.config.data / 'images'
                                               / self.config.random_renders_directory).rglob("*.png"))) // 2
@@ -118,21 +119,14 @@ class HyperSim(DataParser):
             self.gen_poses = torch.cat((self.poses, self.gen_poses), dim=0)
             self.poses = self.gen_poses.clone()
         elif self.use_on_the_fly_random_views:
-            self.gen_image_names = None
-            self.gen_mask_names = None
-
             self.gen_poses, self.nearest_cam_ids = self.generate_all_random_poses(self.poses, num_poses=self.num_total_random_poses)
             # self.gen_poses, self.nearest_cam_ids = self.generate_all_random_poses_sparf(self.poses, num_poses=self.num_total_random_poses)
             # self.gen_poses, self.nearest_cam_ids = self.generate_all_random_poses_slowly_increasing(self.poses,
-            #     num_poses=self.num_total_random_poses, num_trajectories=self.num_random_views_per_batch)
+            #                       num_poses=self.num_total_random_poses, num_trajectories=self.num_random_views_per_batch)
             
             self.nearest_cam_ids = np.concatenate((np.arange(self.poses.shape[0]), self.nearest_cam_ids))
             self.gen_poses = torch.cat((self.poses, self.gen_poses), dim=0).cuda()
             self.poses = self.gen_poses.clone()
-        else:
-            self.gen_image_names = None
-            self.gen_mask_names = None
-            self.gen_poses = None
 
         cameras = Cameras(fx=self.fx, fy=self.fy, cx=self.cx, cy=self.cy,
                           height=self.config.height, width=self.config.width,
