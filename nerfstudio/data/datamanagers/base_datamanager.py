@@ -436,10 +436,12 @@ class VanillaDataManager(DataManager, Generic[TDataset]):  # pylint: disable=abs
                                             split=self.test_split, test_tuning=True)
         elif self.pregen_random_views:
             self.train_dataparser_outputs = self.dataparser.get_dataparser_outputs(
-                                            split="train", pregen_random_views=True)
+                                            split="train", pregen_random_views=True,
+                                            random_renders_directory=self.config.random_renders_directory)
         elif self.on_the_fly_random_views:
             self.train_dataparser_outputs = self.dataparser.get_dataparser_outputs(
                                             split="train", on_the_fly_random_views=True,
+                                            rand_pose_type=self.config.rand_pose_type,
                                             num_total_random_poses=self.num_total_random_poses,
                                             num_random_views_per_batch=self.num_random_views_per_batch)
         else:
