@@ -74,8 +74,6 @@ class HyperSimDataParserConfig(DataParserConfig):
     """Image height"""
     width: int = 1024
     """Image width"""
-    random_renders_directory: str = "no_filt_rendered_cam_00"
-    """Directory containing random renders for pregen_random_views"""
 
 @dataclass
 class HyperSim(DataParser):
@@ -84,9 +82,12 @@ class HyperSim(DataParser):
     def _generate_dataparser_outputs(self, split="train", **kwargs):
         self.test_tuning = kwargs.get("test_tuning", False)
         self.use_pregen_random_views = kwargs.get("pregen_random_views", False)
+        self.random_renders_directory = kwargs.get("random_renders_directory", "no_filt_rendered_cam_00")
         self.use_on_the_fly_random_views = kwargs.get("on_the_fly_random_views", False)
+        self.rand_pose_type = kwargs.get("rand_pose_type", "closeby")
         self.num_total_random_poses = kwargs.get("num_total_random_poses", 0)
         self.num_random_views_per_batch = kwargs.get("num_random_views_per_batch", 0)
+        
         self._load_m_per_asset_unit()
         self._load_scene_metadata()
         self._load_image_ids()
@@ -107,24 +108,31 @@ class HyperSim(DataParser):
             self.all_gen_poses = self.poses.clone()
         elif self.use_pregen_random_views:
             self.num_total_random_poses = len(list((self.config.data / 'images'
-                                              / self.config.random_renders_directory).rglob("*.png"))) // 2
+                                              / self.random_renders_directory).rglob("*.png"))) // 2
             img_ids = ['{:04d}'.format(x) for x in range(self.num_total_random_poses)]
             self.gen_image_names = [None]*len(self.all_image_names) + [
-                str(self.config.data) + f'/images/{self.config.random_renders_directory}/frame.' + x + '.color.png' for x in img_ids]
+                str(self.config.data) + f'/images/{self.random_renders_directory}/frame.' + x + '.color.png' for x in img_ids]
             self.gen_mask_names = [None]*len(self.all_image_names) + [
-                str(self.config.data) + f'/images/{self.config.random_renders_directory}/frame.' + x + '.valid.png' for x in img_ids]
+                str(self.config.data) + f'/images/{self.random_renders_directory}/frame.' + x + '.valid.png' for x in img_ids]
             self.gen_poses = torch.from_numpy(np.load(self.config.data / 'images'
-                                    / f'{self.config.random_renders_directory}' / 'random_poses.npy')).float()
+                                    / f'{self.random_renders_directory}' / 'random_poses.npy')).float()
             self.gen_poses = torch.cat((self.poses, self.gen_poses), dim=0)
             self.poses = self.gen_poses.clone()
         elif self.use_on_the_fly_random_views:
             self.gen_image_names = None
             self.gen_mask_names = None
 
-            self.gen_poses, self.nearest_cam_ids = self.generate_all_random_poses(self.poses, num_poses=self.num_total_random_poses)
-            # self.gen_poses, self.nearest_cam_ids = self.generate_all_random_poses_sparf(self.poses, num_poses=self.num_total_random_poses)
-            # self.gen_poses, self.nearest_cam_ids = self.generate_all_random_poses_slowly_increasing(self.poses,
-            #     num_poses=self.num_total_random_poses, num_trajectories=self.num_random_views_per_batch)
+            if self.rand_pose_type == "closeby":
+                self.gen_poses, self.nearest_cam_ids = self.generate_all_random_poses(
+                                        self.poses, num_poses=self.num_total_random_poses)
+            elif self.rand_pose_type == "sparf":
+                self.gen_poses, self.nearest_cam_ids = self.generate_all_random_poses_sparf(
+                                        self.poses, num_poses=self.num_total_random_poses)
+            elif self.rand_pose_type == "increasing":
+                self.gen_poses, self.nearest_cam_ids = self.generate_all_random_poses_slowly_increasing(
+                    self.poses, num_poses=self.num_total_random_poses, num_trajectories=self.num_random_views_per_batch)
+            else:
+                raise ValueError(f"Unknown rand_pose_type {self.rand_pose_type}")
             
             self.nearest_cam_ids = np.concatenate((np.arange(self.poses.shape[0]), self.nearest_cam_ids))
             self.gen_poses = torch.cat((self.poses, self.gen_poses), dim=0).cuda()
@@ -155,6 +163,7 @@ class HyperSim(DataParser):
                       "gen_mask_filenames": self.gen_mask_names,
                       "gen_poses": self.gen_poses,
                       "nearest_cam_ids": self.nearest_cam_ids,
+                      "ordered_gen_poses": 1 if self.rand_pose_type == "increasing" else 0,
                       "m_per_asset_unit": self.config.m_per_asset_unit,
                       "H_orig": self.config.height, "W_orig": self.config.width,
                       "scene_boundary": self.scene_boundary,
@@ -458,7 +467,6 @@ class HyperSim(DataParser):
 
         new_poses = []
         new_ups = sample_new_ups(num_poses)
-        # new_origins, new_z_axes = spread_out_sample_new_origin_and_z_axes(num_poses)
         new_origins, new_z_axes, render_camera_idx = closeby_sample_new_origin_and_z_axes(num_poses)
         for i in range(num_poses):
             new_poses.append(viewmatrix(new_z_axes[i], new_ups[i], new_origins[i]))

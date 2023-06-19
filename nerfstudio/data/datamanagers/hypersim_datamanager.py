@@ -39,6 +39,12 @@ class HyperSimDataManagerConfig(VanillaDataManagerConfig):
     """The ray sampling strategy to use. Options are "triangle" and "uniform"."""
     dilation_rate: int = 2
     """The dilation factor to use for the triangle pixel sampler."""
+    depth_as_distance: bool = True
+    """Whether to load depth as distance along ray or as z-depth values. Default NeRF is distance"""
+    random_renders_directory: str = "no_filt_rendered_cam_00"
+    """Directory containing random renders for pregen_random_views"""
+    rand_pose_type: str = "closeby"
+    """Type of random pose generation - closeby, sparf, increasing"""
 
 
 class HyperSimDataManager(VanillaDataManager):  # pylint: disable=abstract-method
@@ -80,13 +86,14 @@ class HyperSimDataManager(VanillaDataManager):  # pylint: disable=abstract-metho
                                scale_factor=self.config.camera_res_scale_factor,
                                labels=self.config.labels, test_tuning=self.test_tuning,
                                pregen_random_views=self.pregen_random_views,
-                               on_the_fly_random_views=self.on_the_fly_random_views)
+                               on_the_fly_random_views=self.on_the_fly_random_views,
+                               depth_as_distance=self.config.depth_as_distance)
 
     def create_eval_dataset(self) -> HyperSimDataset:
         return HyperSimDataset(dataparser_outputs=self.dataparser.get_dataparser_outputs(
             split=self.test_split), scale_factor=self.config.camera_res_scale_factor,
             labels=self.config.labels, test_tuning=False, pregen_random_views=False,
-            on_the_fly_random_views=False)
+            on_the_fly_random_views=False, depth_as_distance=False)
 
     def generate_random_views(self, num_views: int, epoch: int) -> Dict:
         """Generate random views for training.

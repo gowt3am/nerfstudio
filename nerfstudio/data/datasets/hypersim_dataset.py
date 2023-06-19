@@ -46,13 +46,14 @@ class HyperSimDataset(InputDataset):
     """
     def __init__(self, dataparser_outputs: DataparserOutputs, scale_factor: float = 1.0,
                  labels: List[str] = [], test_tuning: bool = False, pregen_random_views: bool = False,
-                 on_the_fly_random_views: bool = False):
+                 on_the_fly_random_views: bool = False, depth_as_distance: bool = True):
         super().__init__(dataparser_outputs, scale_factor)
         self.labels = labels
         self.test_tuning = test_tuning
         self.pregen_random_views = pregen_random_views
         self.on_the_fly_random_views = on_the_fly_random_views
-        
+        self.depth_as_distance = depth_as_distance
+
         self.img_filenames = dataparser_outputs.image_filenames
         self.depth_filenames = self.metadata["depth_filenames"]
         self.normal_filenames = self.metadata["normal_filenames"]
@@ -63,7 +64,8 @@ class HyperSimDataset(InputDataset):
         self.gen_mask_filenames = self.metadata["gen_mask_filenames"]
         self.gen_poses = self.metadata["gen_poses"]
         self.render_camera_idx = self.metadata["nearest_cam_ids"]
-
+        self.ordered_gen_poses = self.metadata["ordered_gen_poses"]
+        
         self.m_per_asset_unit = self.metadata["m_per_asset_unit"]
         self.H_orig = self.metadata["H_orig"]
         self.W_orig = self.metadata["W_orig"]
@@ -79,6 +81,7 @@ class HyperSimDataset(InputDataset):
         self.cy = self.metadata["cy"]
         self.orig_poses = self.metadata["orig_poses"]
 
+        self.distance_per_z = self._distance_to_z()
         if "depth" in self.labels:
             self._process_and_clip_depth()
 
@@ -268,6 +271,25 @@ class HyperSimDataset(InputDataset):
                 metadata[label] = self._downscale_content(torch.from_numpy(content), label)
         return metadata
     
+    def _distance_to_z(self):
+        '''Division factor for converting depth from a distance to camera center to z-plane value
+        Code taken from: https://github.com/apple/ml-hypersim/issues/9#issuecomment-754935697
+        '''
+        w_lim_min = (-0.5 * self.W_orig) + 0.5
+        w_lim_max = (0.5 * self.W_orig) - 0.5
+        im_plane_X = np.linspace(w_lim_min, w_lim_max, self.W_orig)
+        im_plane_X = im_plane_X.reshape(1, self.W_orig).repeat(self.H_orig, 0)
+        im_plane_X = im_plane_X.astype(np.float32)[:, :, None]
+        h_lim_min = (-0.5 * self.H_orig) + 0.5
+        h_lim_max = (0.5 * self.H_orig) - 0.5
+        im_plane_Y = np.linspace(h_lim_min, h_lim_max, self.H_orig)
+        im_plane_Y = im_plane_Y.reshape(self.H_orig, 1).repeat(self.W_orig, 1)
+        im_plane_Y = im_plane_Y.astype(np.float32)[:, :, None]
+        im_plane_Z = np.full([self.H_orig, self.W_orig, 1], self.fx, np.float32)
+        im_plane = np.concatenate([im_plane_X, im_plane_Y, im_plane_Z], 2)
+        im_plane_norm2_inv = 1.0 / np.linalg.norm(im_plane, 2, 2)
+        return im_plane_norm2_inv * self.fx
+
     def _process_and_clip_depth(self):
         """Preload all depth files, compute full pointcloud, and crop depth values to new scene bounds if needed"""
         print(f"Preloading all depths, to get pointcloud and crop depth values to new scene bounds...")
@@ -278,6 +300,9 @@ class HyperSimDataset(InputDataset):
                 all_depths[-1] = np.zeros((self.H_orig, self.W_orig), dtype=np.float32)
         all_depths = np.asarray(all_depths)
         all_depths[np.isnan(all_depths)] = 0.0
+        if not self.depth_as_distance:
+            # Converting distance depth to z-plane value
+            all_depths = all_depths * np.expand_dims(self.distance_per_z, axis = 0)
         all_depths = torch.from_numpy(all_depths)
 
         # Converting depth from meters to asset units
@@ -323,7 +348,6 @@ class HyperSimDataset(InputDataset):
     
     def prepare_random_view_generation(self) -> None:
         self.use_max_filtering = False
-        self.try_num_train_views_per_new_view = 1
         self.f = torch.tensor([self.fx, self.fy], dtype=torch.float32).cuda()
         self.p = torch.tensor([self.cx, self.cy], dtype=torch.float32).cuda()
         K = torch.tensor([[self.fx, 0, self.cx], [0, self.fy, self.cy], [0, 0, 1]], dtype=torch.float32).cuda()
@@ -363,12 +387,15 @@ class HyperSimDataset(InputDataset):
     
     def generate_random_views(self, num_views: int, epoch: int) -> Dict:
         """Generate random views of gen_poses on the fly from training images"""
+        if self.ordered_gen_poses > 0:
+            # Use epoch to sample num_views in ordered fashion [Useful for slowly moving away poses]
+            self.rand_indices = [x + len(self.img_filenames) for x in
+                                np.arange(epoch*num_views, (epoch+1)*num_views, 1)]
+        else:
+            # Randomly sample num_views random poses from gen_poses
+            self.rand_indices = [x + len(self.img_filenames) for x in
+                                np.random.choice(self.num_random_views, num_views, replace=False)]
         
-        # Randomly sample num_views random poses from gen_poses
-        self.rand_indices = [x + len(self.img_filenames) for x in np.random.choice(self.num_random_views, num_views, replace=False)]
-        # # Use epoch to sample num_views in ordered fashion [Useful for slowly increasing poses]
-        # self.rand_indices = [x + len(self.img_filenames) for x in np.arange(epoch*num_views, (epoch+1)*num_views, 1)]
-
         self.rand_poses = self.gen_poses[self.rand_indices]
         self.rendered_images = []
         self.rendered_masks = []
@@ -384,33 +411,7 @@ class HyperSimDataset(InputDataset):
             t_gt = torch.as_tensor(-R_gt.T @ t_gt[:, None], dtype=torch.float32).cuda().squeeze()
             R_gt = torch.as_tensor(R_gt.T, dtype=torch.float32).cuda()
 
-            # Randomly sampling few closest and few random images from trainset for each new random view
-            # t_gt_np = tgt_pose[:3, 3].numpy()
-            # distances_to_gt = []
-            # for idx in range(len(self.img_filenames)):
-            #     data = self.__getitem__(idx)
-            #     cam1_to_world = data["pose"].numpy()
-            #     t1 = cam1_to_world[:3, 3]
-            #     distances_to_gt.append(np.linalg.norm(t1 - t_gt_np))
-            # distances_to_gt = np.array(distances_to_gt)
-            # closest_images = np.argsort(distances_to_gt)[:self.NUM_CLOSEST_TRAIN_VIEWS]
-            # random_images = np.random.choice(np.delete(np.arange(len(self.img_filenames)), \
-            #                     closest_images), self.NUM_RANDOM_TRAIN_VIEWS, replace=False)
-            # closest_images = np.concatenate([closest_images, random_images])
-
-            # # Randomly sample few training images
-            # train_idxs = np.random.choice(len(self.img_filenames), self.try_num_train_views_per_new_view, replace=False)
-            # points = []
-            # colors = []
-            # for idx in train_idxs:
-            #     points.append(self.all_points[2*idx])
-            #     colors.append(self.all_colors[2*idx])
-            #     points.append(self.all_points[2*idx + 1])
-            #     colors.append(self.all_colors[2*idx + 1])
-            # points = torch.cat(points, dim=0).cuda().float()
-            # colors = torch.cat(colors, dim=0).cuda().float()
             # Select the nearest training view for each new random view
-            self.try_num_train_views_per_new_view = 1
             train_idx = self.render_camera_idx[self.rand_indices[i]]
             points = torch.cat([self.all_points[2*train_idx], self.all_points[2*train_idx + 1]], dim=0).cuda().float()
             colors = torch.cat([self.all_colors[2*train_idx], self.all_colors[2*train_idx + 1]], dim=0).cuda().float()
@@ -427,17 +428,8 @@ class HyperSimDataset(InputDataset):
             renderer = PointsRenderer(rasterizer=rasterizer, compositor=NormWeightedCompositor())
             rendered_images = renderer(point_cloud).cpu().numpy()
 
-            # Finding maximum coverage of image among all rendered images
-            if self.try_num_train_views_per_new_view > 1:
-                overlap_area = []
-                for idx in range(0, 2*self.try_num_train_views_per_new_view, 2):
-                    render_mask = (rendered_images[idx+1, :, :, :]*255).astype(np.uint8)
-                    overlap_area.append(np.sum(np.all(render_mask  != 0, axis=-1)))
-                max_overlap_idx = np.argmax(overlap_area)
-            else:
-                max_overlap_idx = 0
-            image = (rendered_images[max_overlap_idx*2, :, :, :]*255).astype(np.uint8)
-            mask = (rendered_images[max_overlap_idx*2+1, :, :, :]*255).astype(np.uint8)
+            image = (rendered_images[0, :, :, :]*255).astype(np.uint8)
+            mask = (rendered_images[1, :, :, :]*255).astype(np.uint8)
 
             # Apply max filter twice to remove missing pixels (ignore actual black objects)
             if self.use_max_filtering:
