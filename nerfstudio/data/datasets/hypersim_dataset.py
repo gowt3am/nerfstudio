@@ -329,7 +329,7 @@ class HyperSimDataset(InputDataset):
 
     def find_closest_poses(self):
         """For all poses, find the closest pose from trainset"""
-        self.closest_poses = []
+        closest_poses = []
         for i in range(self.gen_poses.shape[0]):
             tgt_pose = self.gen_poses[i]
             t_gt_np = tgt_pose[:3, 3].numpy()
@@ -342,8 +342,8 @@ class HyperSimDataset(InputDataset):
                     distances_to_gt.append(np.inf)
             distances_to_gt = np.array(distances_to_gt)
             closest_idx = np.argsort(distances_to_gt)[0]
-            self.closest_poses.append(self.gen_poses[closest_idx])
-        self.closest_poses = torch.from_numpy(np.array(self.closest_poses))
+            closest_poses.append(self.gen_poses[closest_idx])
+        self.closest_poses = torch.stack(closest_poses, dim=0)
 
     def __get_pregen_rand_item__(self, image_idx: int) -> Dict:
         data = {"image_idx": image_idx}

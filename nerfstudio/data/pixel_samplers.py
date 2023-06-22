@@ -103,18 +103,20 @@ class PixelSampler:  # pylint: disable=too-few-public-methods
         c, y, x = (i.flatten() for i in torch.split(indices, 1, dim=-1))
         c, y, x = c.cpu(), y.cpu(), x.cpu()
         
-        # Needed to correct the random indices to their actual camera idx locations.
-        indices[:, 0] = batch["image_idx"][c]
-        collated_batch = {"indices": indices}  # with the abs camera indices
-
+        collated_batch = {}
         for key, value in batch.items():
-            if key != "image_idx" and key != "pose" and value is not None:
+            if key not in ["image_idx", "pose", "closest_pose"] and value is not None:
                 collated_batch[key] = value[c, y, x]
-        
+        assert collated_batch["image"].shape[0] == num_rays_per_batch
+
         if "pose" in batch:
             collated_batch["pose"] = batch["pose"][c]
-        
-        assert collated_batch["image"].shape[0] == num_rays_per_batch
+        if "closest_pose" in batch:
+            collated_batch["closest_pose"] = batch["closest_pose"][c]
+                
+        # Needed to correct the random indices to their actual camera idx locations.
+        indices[:, 0] = batch["image_idx"][c]
+        collated_batch["indices"] = indices  # with the abs camera indices
 
         if keep_full_image:
             collated_batch["full_image"] = batch["image"]

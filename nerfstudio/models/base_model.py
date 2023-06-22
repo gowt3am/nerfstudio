@@ -69,6 +69,7 @@ class Model(nn.Module):
         config: ModelConfig,
         scene_box: SceneBox,
         num_train_data: int,
+        metadata: Dict[str, Any],
         **kwargs,
     ) -> None:
         super().__init__()
@@ -76,6 +77,7 @@ class Model(nn.Module):
         self.scene_box = scene_box
         self.render_aabb = None  # the box that we want to render - should be a subset of scene_box
         self.num_train_data = num_train_data
+        self.metadata = metadata
         self.kwargs = kwargs
         self.collider = None
 
@@ -115,7 +117,7 @@ class Model(nn.Module):
         """
 
     @abstractmethod
-    def get_outputs(self, ray_bundle: RayBundle) -> Dict[str, torch.Tensor]:
+    def get_outputs(self, ray_bundle: RayBundle, batch, **kwargs) -> Dict[str, torch.Tensor]:
         """Takes in a Ray Bundle and returns a dictionary of outputs.
 
         Args:
@@ -126,7 +128,7 @@ class Model(nn.Module):
             Outputs of model. (ie. rendered colors)
         """
 
-    def forward(self, ray_bundle: RayBundle, batch, **kwargs) -> Dict[str, torch.Tensor]:
+    def forward(self, ray_bundle: RayBundle, batch: Dict, **kwargs) -> Dict[str, torch.Tensor]:
         """Run forward starting with a ray bundle. This outputs different things depending on the configuration
         of the model and whether or not the batch is provided (whether or not we are training basically)
 
@@ -137,7 +139,7 @@ class Model(nn.Module):
         if self.collider is not None:
             ray_bundle = self.collider(ray_bundle)
 
-        return self.get_outputs(ray_bundle, **kwargs)
+        return self.get_outputs(ray_bundle, batch, **kwargs)
 
     def get_metrics_dict(self, outputs, batch) -> Dict[str, torch.Tensor]:
         """Compute and returns metrics.

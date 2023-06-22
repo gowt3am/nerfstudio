@@ -44,10 +44,15 @@ class RayGenerator(nn.Module):
         Args:
             ray_indices: Contains camera, row, and col indices for target rays.
         """
-        c = ray_indices[:, 0]  # camera indices
-        y = ray_indices[:, 1]  # row indices
-        x = ray_indices[:, 2]  # col indices
-        coords = self.image_coords[y, x]
+        c = ray_indices[:, 0].long()  # camera indices
+        y = ray_indices[:, 1].long()  # row indices
+        x = ray_indices[:, 2].long()  # col indices
+        
+        if self.image_coords.device != y.device:
+            image_coords = self.image_coords.to(y.device)
+            coords = image_coords[y, x]
+        else:
+            coords = self.image_coords[y, x]
 
         camera_opt_to_camera = self.pose_optimizer(c)
 
