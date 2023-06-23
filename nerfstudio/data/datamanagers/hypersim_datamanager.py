@@ -45,6 +45,11 @@ class HyperSimDataManagerConfig(VanillaDataManagerConfig):
     """Directory containing random renders for pregen_random_views"""
     rand_pose_type: str = "closeby"
     """Type of random pose generation - closeby, sparf, increasing"""
+    dilation_mask: int = 2
+    """Random view mask dilation factor (to avoid invalid-pixel neighbors being detected as edges)"""
+    dilation_edge: int = 3
+    """Random view edge dilation factor (for filling in edge neighbors)"""
+    
 
 
 class HyperSimDataManager(VanillaDataManager):  # pylint: disable=abstract-method
@@ -88,13 +93,14 @@ class HyperSimDataManager(VanillaDataManager):  # pylint: disable=abstract-metho
                                pregen_random_views=self.pregen_random_views,
                                on_the_fly_random_views=self.on_the_fly_random_views,
                                rendered_depth_new_views=self.rendered_depth_new_views,
-                               depth_as_distance=self.config.depth_as_distance)
+                               depth_as_distance=self.config.depth_as_distance,
+                               dilation_mask=self.config.dilation_mask,
+                               dilation_edge=self.config.dilation_edge)
 
     def create_eval_dataset(self) -> HyperSimDataset:
         return HyperSimDataset(dataparser_outputs=self.dataparser.get_dataparser_outputs(
             split=self.test_split), scale_factor=self.config.camera_res_scale_factor,
-            labels=self.config.labels, test_tuning=False, pregen_random_views=False,
-            on_the_fly_random_views=False, rendered_depth_new_views=False, depth_as_distance=False)
+            labels=self.config.labels)
 
     def generate_random_views(self, num_views: int, epoch: int) -> Dict:
         """Generate random views for training.

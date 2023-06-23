@@ -16,6 +16,7 @@
 HyperSim dataset.
 """
 
+import cv2
 import h5py
 import warnings
 from typing import Dict
@@ -25,7 +26,7 @@ import torch
 import torch.nn.functional as F
 from einops import rearrange
 from PIL import Image, ImageFilter
-from typing import List
+from typing import List, Tuple
 from torchtyping import TensorType
 
 from pytorch3d.structures import Pointclouds
@@ -45,16 +46,16 @@ class HyperSimDataset(InputDataset):
         scale_factor: The downscaling factor for the dataparser outputs.
     """
     def __init__(self, dataparser_outputs: DataparserOutputs, scale_factor: float = 1.0,
-                 labels: List[str] = [], test_tuning: bool = False, pregen_random_views: bool = False,
-                 on_the_fly_random_views: bool = False, rendered_depth_new_views: bool = False,
-                 depth_as_distance: bool = True):
+                 labels: List[str] = [], **kwargs):
         super().__init__(dataparser_outputs, scale_factor)
         self.labels = labels
-        self.test_tuning = test_tuning
-        self.pregen_random_views = pregen_random_views
-        self.on_the_fly_random_views = on_the_fly_random_views
-        self.rendered_depth_new_views = rendered_depth_new_views
-        self.depth_as_distance = depth_as_distance
+        self.test_tuning = kwargs.get("test_tuning", False)
+        self.pregen_random_views = kwargs.get("pregen_random_views", False)
+        self.on_the_fly_random_views = kwargs.get("on_the_fly_random_views", False)
+        self.rendered_depth_new_views = kwargs.get("rendered_depth_new_views", False)
+        self.depth_as_distance = kwargs.get("depth_as_distance", True)
+        self.dk_mask = kwargs.get("dilation_mask", 2)
+        self.dk_edge = kwargs.get("dilation_edge", 3)
 
         self.img_filenames = dataparser_outputs.image_filenames
         self.depth_filenames = self.metadata["depth_filenames"]
@@ -312,6 +313,9 @@ class HyperSimDataset(InputDataset):
         if not self.depth_as_distance:
             # Converting distance depth to z-plane value
             all_depths = all_depths * np.expand_dims(self.distance_per_z, axis = 0)
+            depth_type = "z"
+        else:
+            depth_type = "distance"
         all_depths = torch.from_numpy(all_depths)
 
         # Converting depth from meters to asset units
@@ -319,7 +323,8 @@ class HyperSimDataset(InputDataset):
         if (self.xyz_min != self.scene_boundary['xyz_scene_min']).any() or \
            (self.xyz_max != self.scene_boundary['xyz_scene_max']).any():
             self.ray_centers_cam = hypersim_generate_camera_rays((self.H, self.W), self.M_cam_from_uv)
-            self.P_world = hypersim_generate_pointcloud(self.ray_centers_cam, self.orig_poses, all_depths)
+            self.P_world = hypersim_generate_pointcloud(self.ray_centers_cam, self.orig_poses,
+                                                        all_depths, depth_type)
             self.all_depths = hypersim_clip_depths_to_bbox(depths=all_depths, 
                 P_world=self.P_world, poses=self.orig_poses, xyz_min=self.xyz_min, xyz_max=self.xyz_max)
         else:
@@ -412,6 +417,26 @@ class HyperSimDataset(InputDataset):
         self.rand_indices = [x + len(self.img_filenames) for x in np.random.choice(self.num_random_views, 50, replace=False)] 
         self.rand_poses = self.gen_poses[self.rand_indices]
     
+    def detect_edges(self, image: np.ndarray, valid_mask: np.ndarray, dk_mask: int = 2,
+                     dk_edge: int = 3) -> Tuple[np.ndarray, np.ndarray]:
+        """Detect edges in image, ignore the invalid mask regions, and dilate the edges"""
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+        edges = cv2.Canny(gray, 50, 150)
+        edge_mask = np.zeros_like(edges)
+        edge_mask[edges > 0] = 255
+        
+        invalid_mask = (valid_mask == 0).astype(np.uint8)
+        invalid_mask = cv2.dilate(invalid_mask, np.ones((dk_mask, dk_mask)), iterations=1)
+        edge_mask[invalid_mask > 0] = 0
+
+        if dk_edge > 0:
+            edge_mask = cv2.dilate(edge_mask, np.ones((dk_edge, dk_edge)), iterations=1)
+
+        # Set pixels within the dilated mask to black
+        result = image.copy()
+        result[edge_mask > 0] = 0
+        return result, edge_mask
+
     def generate_random_views(self, num_views: int, epoch: int) -> Dict:
         """Generate random views of gen_poses on the fly from training images"""
         if self.ordered_gen_poses > 0:
@@ -477,14 +502,18 @@ class HyperSimDataset(InputDataset):
                 mask[changed_pixels] = np.array([255, 255, 255])
             else:
                 img_5 = image
+            
+            if self.dk_edge > -1:
+                img_5, edge_mask = self.detect_edges(img_5, mask[:,:,0], dk_mask=self.dk_mask,
+                                                dk_edge=self.dk_edge)
+                mask[edge_mask > 0] = np.array([0, 0, 0])
 
             save_dest = "/scratch_net/bmicdl02/gsenthi/data/temp/"
-            # Use Pillow to save img_5 at save_dest
             img = Image.fromarray(img_5)
             img.save(save_dest + f"img_{self.rand_indices[i]}.png")
             
             self.rendered_images.append(img_5)
-            self.rendered_masks.append(mask[:,:,0])
+            self.rendered_masks.append(mask[:, :, 0])
             self.rand_indices_dict[self.rand_indices[i]] = i
 
         # If original image, then set its index to -1

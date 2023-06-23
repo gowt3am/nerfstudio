@@ -116,7 +116,7 @@ def hypersim_generate_camera_rays(size: Tuple, M_cam_from_uv: TensorType = None)
 
 def hypersim_generate_pointcloud(ray_centers_cam: TensorType,
                                  poses: TensorType["num_cameras":..., 4, 4],
-                                 depths: TensorType) -> TensorType:
+                                 depths: TensorType, depth_type: str = 'distance') -> TensorType:
     """Generates a pointcloud from depth values for the Hypersim dataset"""
     depth = rearrange(depths.clone(), 'b h w -> b (h w)') 
     if depth.dim() == 2:
@@ -124,7 +124,15 @@ def hypersim_generate_pointcloud(ray_centers_cam: TensorType,
     else:
         assert depth.dim() == 3
     # Normalize such that ||ray||=1 [Assuming depth is distance and not z-coordinate]
-    ray_centers_cam = F.normalize(ray_centers_cam.clone().unsqueeze(0), p = 2, dim = -1)
+    ray_centers_cam = ray_centers_cam.clone().unsqueeze(0)
+    if depth_type == 'z':
+        # Normalize such that |z| = 1
+        ray_centers_cam = (ray_centers_cam / torch.abs(ray_centers_cam[:, :, 2:3]))
+    elif depth_type == 'distance':
+        # Normalize such that ||ray||=1
+        ray_centers_cam = F.normalize(ray_centers_cam, p = 2, dim = -1)
+    else:
+        raise NotImplementedError(f"Depth type {depth_type} not implemented")
 
     P_cam = ray_centers_cam * depth
     P_cam = torch.cat((P_cam, torch.ones_like(depth)), dim = -1)
@@ -144,7 +152,7 @@ def hypersim_clip_depths_to_bbox(depths: TensorType, P_world: TensorType,
     P_world_bound = P_world.clone()
     P_world_bound = torch.where(P_world > xyz_max, xyz_max, P_world_bound)
     P_world_bound = torch.where(P_world < xyz_min, xyz_min, P_world_bound)
-    S = (P_world_bound - poses[:, None, :3, 3]) / (P_world - poses[:, None, :3, 3])
+    S = (P_world_bound - poses[:, None, :3, 3]) / (P_world - poses[:, None, :3, 3] + 1e-8)
     S = torch.where((depth.unsqueeze(-1) == 0.0), torch.ones_like(S), S)
     S = torch.min(S, dim=-1, keepdim=True)[0]
     S = S[...,0]
