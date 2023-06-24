@@ -177,6 +177,8 @@ class ManhattanNerfactoModelConfig(ModelConfig):
     """Step at which to start using rendered depth to create random views and calculate loss"""
     use_only_manhattan_depth_for_rendered_views: bool = False
     """Whether to use only manhattan-normal pixels to create random views or not"""
+    use_depth_consistency_loss: bool = False
+    """Whether to use depth consistency loss for rendered_views or not"""
 
 
 class ManhattanNerfactoModel(Model):
@@ -421,18 +423,20 @@ class ManhattanNerfactoModel(Model):
                 kwargs.get("step", -1) >= self.config.rendered_depth_new_view_start_step:
             rand_pose = self.sparf_pose_interpolation(batch["pose"], batch["closest_pose"])
             # Batch project RGBD from batch["image"] & outputs["depth"] from batch["pose"] to rand_pose
-            dst_indices, mask = self.warp_rgbd_to_new_pose(batch["indices"], outputs["depth"], batch["pose"], rand_pose)
+            dst_indices, mask, dst_depth = self.warp_rgbd_to_new_pose(batch["indices"], outputs["depth"], batch["pose"], rand_pose)
 
             if self.config.use_only_manhattan_depth_for_rendered_views and "normals" in outputs:
                 normal_clusters = self.manhattan_normal_loss.get_top_3_cluster_associations(outputs["normals"])
                 dst_indices = dst_indices[normal_clusters != 0].contiguous()
                 mask = mask[normal_clusters != 0].contiguous()
+                dst_depth = dst_depth[normal_clusters != 0].contiguous()
                 rgb_tgt = batch["image"].to(self.device)[normal_clusters != 0][mask].contiguous()
             else:
                 rgb_tgt = batch["image"].to(self.device)[mask].contiguous()
             
             # Generate rays for rand_pose camera, forward propagate through field and render its RGB
             dst_indices = dst_indices[mask].contiguous()
+            dst_depth = dst_depth[mask].contiguous()
             dst_ray_bundle = self.ray_generator(dst_indices, rand_pose)
 
             # Forward propagate through field and render its RGB
@@ -442,7 +446,13 @@ class ManhattanNerfactoModel(Model):
             weights_list.append(weights)
             ray_samples_list.append(ray_samples)
             rgb = self.renderer_rgb(rgb=field_outputs[FieldHeadNames.RGB], weights=weights)
-            # depth = self.renderer_depth(weights=weights, ray_samples=ray_samples)
+            
+            if self.config.use_depth_consistency_loss:
+                depth = self.renderer_depth(weights=weights, ray_samples=ray_samples)
+                dst_u = dst_indices[:, 1].clone().long()
+                dst_v = dst_indices[:, 2].clone().long()
+                dst_distance = dst_depth / self.distance_to_z[dst_u, dst_v]
+                outputs["depth_consistency_loss"] = self.rgb_loss(depth.squeeze(), dst_distance)
             # accumulation = self.renderer_accumulation(weights=weights)
             outputs["rand_rgb_loss"] = self.rgb_loss(rgb_tgt, rgb)
         return outputs
@@ -538,6 +548,8 @@ class ManhattanNerfactoModel(Model):
         if self.training:
             if "rand_rgb_loss" in outputs:
                 loss_dict["rand_rgb_loss"] = outputs["rand_rgb_loss"]
+            if "depth_consistency_loss" in outputs:
+                loss_dict["depth_consistency_loss"] = outputs["depth_consistency_loss"]
             loss_dict["interlevel_loss"] = self.config.interlevel_loss_mult * interlevel_loss(
                 outputs["weights_list"], outputs["ray_samples_list"]
             )
@@ -718,7 +730,7 @@ class ManhattanNerfactoModel(Model):
         
         # Return indices as (cam(0), row, col)
         return torch.stack([torch.zeros(uv_dst.shape[1], device=self.device),
-                            uv_dst[1, :], uv_dst[0, :]], dim=1), valid_mask
+                            uv_dst[1, :], uv_dst[0, :]], dim=1), valid_mask, dst_depth
     
     def ray_generator(self, indices: TensorType, pose: TensorType) -> RayBundle:
         """ Create a camera at pose, and use indices to create RayBundle object"""

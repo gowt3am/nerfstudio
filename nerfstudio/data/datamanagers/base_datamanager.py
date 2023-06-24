@@ -420,6 +420,7 @@ class VanillaDataManager(DataManager, Generic[TDataset]):  # pylint: disable=abs
 
         self.config.train_num_times_to_repeat_images = kwargs.get("new_views_every_iters",
                                         self.config.train_num_times_to_repeat_images)
+        # self.config.train_num_images_to_sample_from = 1
         self.config.train_num_images_to_sample_from = 1 if self.rendered_depth_new_views \
                                         else self.config.train_num_images_to_sample_from
         

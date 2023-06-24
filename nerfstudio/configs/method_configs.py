@@ -95,11 +95,11 @@ descriptions = {
 
 method_configs["manhattan-mipnerf"] = TrainerConfig(
     method_name="manhattan-mipnerf",
-    steps_per_eval_batch=1000,
-    steps_per_eval_image=1000,
+    steps_per_eval_batch=2000,
+    steps_per_eval_image=2000,
     steps_per_save=2000,
-    steps_per_eval_all_images=29990,
-    max_num_iterations=30000,
+    steps_per_eval_all_images=33330,
+    max_num_iterations=100000,
     pipeline=VanillaPipelineConfig(
         datamanager=HyperSimDataManagerConfig(dataparser=HyperSimDataParserConfig(),
                                              train_num_rays_per_batch=1023),
