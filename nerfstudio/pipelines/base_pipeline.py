@@ -300,7 +300,10 @@ class VanillaPipeline(Pipeline):
         """
         if self.config.on_the_fly_random_views and step % self.config.new_views_every_iters == 0:
             rand_indices = self.datamanager.generate_random_views(self.config.num_random_views, epoch=step // self.config.new_views_every_iters)
-            self.model.reset_illumination_parameters(rand_indices)
+            try:
+                self.model.reset_illumination_parameters(rand_indices)
+            except AttributeError:
+                pass
         ray_bundle, batch = self.datamanager.next_train(step)
         model_outputs = self.model(ray_bundle=ray_bundle, batch=batch, step=step)
         metrics_dict = self.model.get_metrics_dict(model_outputs, batch)

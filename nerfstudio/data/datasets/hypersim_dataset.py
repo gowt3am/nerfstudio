@@ -473,7 +473,8 @@ class HyperSimDataset(InputDataset):
             rasterizer = PointsRasterizer(cameras=cameras, raster_settings=raster_settings)
             renderer = PointsRenderer(rasterizer=rasterizer, compositor=NormWeightedCompositor())
             rendered_images = renderer(point_cloud).cpu().numpy()
-
+            # img, depth = renderer(point_cloud)
+            # rendered_images = img.cpu().numpy()
             image = (rendered_images[0, :, :, :]*255).astype(np.uint8)
             mask = (rendered_images[1, :, :, :]*255).astype(np.uint8)
 

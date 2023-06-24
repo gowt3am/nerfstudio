@@ -44,7 +44,7 @@ class ModelConfig(InstantiateConfig):
     """target class to instantiate"""
     enable_collider: bool = True
     """Whether to create a scene collider to filter rays."""
-    collider_params: Optional[Dict[str, float]] = to_immutable_dict({"near_plane": 2.0, "far_plane": 6.0})
+    collider_params: Optional[Dict[str, float]] = to_immutable_dict({"near_plane": 0.0, "far_plane": 20.0})
     """parameters to instantiate scene collider with"""
     loss_coefficients: Dict[str, float] = to_immutable_dict({"rgb_loss_coarse": 1.0, "rgb_loss_fine": 1.0})
     """parameters to instantiate density field with"""

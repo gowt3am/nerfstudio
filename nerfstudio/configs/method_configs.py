@@ -56,6 +56,7 @@ from nerfstudio.field_components.temporal_distortions import TemporalDistortionK
 from nerfstudio.fields.sdf_field import SDFFieldConfig
 from nerfstudio.models.depth_nerfacto import DepthNerfactoModelConfig
 from nerfstudio.models.instant_ngp import InstantNGPModelConfig
+from nerfstudio.models.manhattan_mipnerf import ManhattanMipNerfModel
 from nerfstudio.models.manhattan_nerfacto import ManhattanNerfactoModelConfig
 from nerfstudio.models.mipnerf import MipNerfModel
 from nerfstudio.models.nerfacto import NerfactoModelConfig
@@ -72,6 +73,7 @@ from nerfstudio.plugins.registry import discover_methods
 
 method_configs: Dict[str, TrainerConfig] = {}
 descriptions = {
+    "manhattan-mipnerf": "Same as mipnerf but with Manhattan regularization. (slow)",
     "manhattan-nerfacto": "Same as Manhattan-INGP but with Nerfacto backbone (currently only works with hypersim)",
     "nerfacto": "Recommended real-time model tuned for real captures. This model will be continually updated.",
     "nerfacto-big": "Larger version of nerfacto. (slow and long)",
@@ -90,6 +92,32 @@ descriptions = {
     "neus": "Implementation of NeuS. (slow)",
     "neus-facto": "Implementation of NeuS-Facto. (slow)",
 }
+
+method_configs["manhattan-mipnerf"] = TrainerConfig(
+    method_name="manhattan-mipnerf",
+    steps_per_eval_batch=1000,
+    steps_per_eval_image=1000,
+    steps_per_save=2000,
+    steps_per_eval_all_images=29990,
+    max_num_iterations=30000,
+    pipeline=VanillaPipelineConfig(
+        datamanager=HyperSimDataManagerConfig(dataparser=HyperSimDataParserConfig(),
+                                             train_num_rays_per_batch=1023),
+        model=VanillaModelConfig(
+            _target=ManhattanMipNerfModel,
+            loss_coefficients={"rgb_loss_coarse": 0.1, "rgb_loss_fine": 1.0},
+            num_coarse_samples=128,
+            num_importance_samples=128,
+            eval_num_rays_per_chunk=1024,
+        ),
+    ),
+    optimizers={
+        "fields": {
+            "optimizer": RAdamOptimizerConfig(lr=5e-4, eps=1e-08),
+            "scheduler": None,
+        }
+    },
+)
 
 method_configs["manhattan-nerfacto"] = TrainerConfig(
     method_name="manhattan-nerfacto",
