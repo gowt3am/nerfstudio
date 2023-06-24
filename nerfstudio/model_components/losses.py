@@ -560,6 +560,39 @@ class ManhattanNormalLoss(nn.Module):
         self.weight_schedule = lambda weight, step : max(0, min(weight, \
                     weight * (step - start_step) / (grow_till_step - start_step)))
 
+    def get_top_3_cluster_associations(self, normals: TensorType) -> TensorType:
+        """Clusters normals into 20 bins, finds 3 most orthogonal clusters and
+        returns the cluster association of each normal
+        
+        Returns:
+            normal_clusters: Tensor of shape (num_normals,) with values 1, 2, 3
+        """
+        
+        normal_clusters, cluster_centers = _cluster_normals(
+                    normals = normals.detach().contiguous().cpu().numpy(), 
+                    device = normals.device, num_clusters = 20, num_iterations = 20,
+                    similar_threshold = self.min_cluster_similarity,
+                    merge_clusters = True, find_opposites = True)
+        # normals_orthogonal = normals[normal_clusters != 0].contiguous()
+        # normal_clusters = normal_clusters[normal_clusters != 0]
+        normals_orthogonal = normals.contiguous()
+
+        # Flip opposites, if any, to just have 3 clusters
+        normals_orthogonal[normal_clusters < 0] *= -1.0
+        normal_clusters[normal_clusters < 0] *= -1
+
+        # Keep only members close enough to cluster centroid
+        discard_1 = (normals_orthogonal[normal_clusters == 1] *
+                    cluster_centers[0].unsqueeze(0)).sum(-1) < self.min_cluster_similarity
+        discard_2 = (normals_orthogonal[normal_clusters == 2] *
+                     cluster_centers[1].unsqueeze(0)).sum(-1) < self.min_cluster_similarity
+        discard_3 = (normals_orthogonal[normal_clusters == 3] *
+                     cluster_centers[2].unsqueeze(0)).sum(-1) < self.min_cluster_similarity
+        normal_clusters[normal_clusters == 1][discard_1] = 0
+        normal_clusters[normal_clusters == 2][discard_2] = 0
+        normal_clusters[normal_clusters == 3][discard_3] = 0
+        return normal_clusters
+
     def forward(self, normals: TensorType, step: int) -> TensorType:
         if ((self.end_step != -1) and (step >= self.end_step)) or step < self.start_step:
             output_loss_dict = {

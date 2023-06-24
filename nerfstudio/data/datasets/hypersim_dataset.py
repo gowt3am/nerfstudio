@@ -53,7 +53,6 @@ class HyperSimDataset(InputDataset):
         self.pregen_random_views = kwargs.get("pregen_random_views", False)
         self.on_the_fly_random_views = kwargs.get("on_the_fly_random_views", False)
         self.rendered_depth_new_views = kwargs.get("rendered_depth_new_views", False)
-        self.depth_as_distance = kwargs.get("depth_as_distance", True)
         self.dk_mask = kwargs.get("dilation_mask", 2)
         self.dk_edge = kwargs.get("dilation_edge", 3)
 
@@ -86,7 +85,7 @@ class HyperSimDataset(InputDataset):
         self.cy = self.metadata["cy"]
         self.orig_poses = self.metadata["orig_poses"]
 
-        self.distance_per_z = self._distance_to_z()
+        self.distance_per_z = torch.from_numpy(self._distance_to_z())
         if "depth" in self.labels:
             self._process_and_clip_depth()
 
@@ -310,12 +309,6 @@ class HyperSimDataset(InputDataset):
                 all_depths[-1] = np.zeros((self.H_orig, self.W_orig), dtype=np.float32)
         all_depths = np.asarray(all_depths)
         all_depths[np.isnan(all_depths)] = 0.0
-        if not self.depth_as_distance:
-            # Converting distance depth to z-plane value
-            all_depths = all_depths * np.expand_dims(self.distance_per_z, axis = 0)
-            depth_type = "z"
-        else:
-            depth_type = "distance"
         all_depths = torch.from_numpy(all_depths)
 
         # Converting depth from meters to asset units
@@ -324,7 +317,7 @@ class HyperSimDataset(InputDataset):
            (self.xyz_max != self.scene_boundary['xyz_scene_max']).any():
             self.ray_centers_cam = hypersim_generate_camera_rays((self.H, self.W), self.M_cam_from_uv)
             self.P_world = hypersim_generate_pointcloud(self.ray_centers_cam, self.orig_poses,
-                                                        all_depths, depth_type)
+                                                        all_depths, "distance")
             self.all_depths = hypersim_clip_depths_to_bbox(depths=all_depths, 
                 P_world=self.P_world, poses=self.orig_poses, xyz_min=self.xyz_min, xyz_max=self.xyz_max)
         else:
@@ -396,7 +389,8 @@ class HyperSimDataset(InputDataset):
             train_data = self.__getitem__(j)
             img2 = train_data["image"]
 
-            D2 = train_data["depth"].cuda()         # (H, W)
+            D2 = train_data["depth"].clone()
+            D2 = (D2 * self.distance_per_z).cuda()  # (H, W)
             D2 = rearrange(D2, "h w -> (h w) 1")
             R2 = train_data["pose"][:3, :3]         # (3, 3) in Right-Up-Back (Cam 2 World) format
             t2 = train_data["pose"][:3, 3]          # (3, 1) in Right-Up-Back (Cam 2 World) format

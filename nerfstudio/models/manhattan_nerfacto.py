@@ -175,6 +175,8 @@ class ManhattanNerfactoModelConfig(ModelConfig):
     """Whether to use affine illumination modeling or not for random views"""
     rendered_depth_new_view_start_step: int = 1000
     """Step at which to start using rendered depth to create random views and calculate loss"""
+    use_only_manhattan_depth_for_rendered_views: bool = False
+    """Whether to use only manhattan-normal pixels to create random views or not"""
 
 
 class ManhattanNerfactoModel(Model):
@@ -420,10 +422,17 @@ class ManhattanNerfactoModel(Model):
             rand_pose = self.sparf_pose_interpolation(batch["pose"], batch["closest_pose"])
             # Batch project RGBD from batch["image"] & outputs["depth"] from batch["pose"] to rand_pose
             dst_indices, mask = self.warp_rgbd_to_new_pose(batch["indices"], outputs["depth"], batch["pose"], rand_pose)
-            rgb_tgt = batch["image"].to(self.device)[mask]
+
+            if self.config.use_only_manhattan_depth_for_rendered_views and "normals" in outputs:
+                normal_clusters = self.manhattan_normal_loss.get_top_3_cluster_associations(outputs["normals"])
+                dst_indices = dst_indices[normal_clusters != 0].contiguous()
+                mask = mask[normal_clusters != 0].contiguous()
+                rgb_tgt = batch["image"].to(self.device)[normal_clusters != 0][mask].contiguous()
+            else:
+                rgb_tgt = batch["image"].to(self.device)[mask].contiguous()
             
             # Generate rays for rand_pose camera, forward propagate through field and render its RGB
-            dst_indices = dst_indices[mask]
+            dst_indices = dst_indices[mask].contiguous()
             dst_ray_bundle = self.ray_generator(dst_indices, rand_pose)
 
             # Forward propagate through field and render its RGB

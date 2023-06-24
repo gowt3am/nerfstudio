@@ -33,14 +33,12 @@ class HyperSimDataManagerConfig(VanillaDataManagerConfig):
     """A hypersim datamanager - required to use with .setup()"""
     _target: Type = field(default_factory=lambda: HyperSimDataManager)
     
-    labels: List[str] = field(default_factory=lambda: ["depth"])
+    labels: List[str] = field(default_factory=lambda: ["depth", "normals"])
     """Labels/Files to load"""
     ray_sampling_strategy: str = "triangle"
     """The ray sampling strategy to use. Options are "triangle" and "uniform"."""
     dilation_rate: int = 2
     """The dilation factor to use for the triangle pixel sampler."""
-    depth_as_distance: bool = True
-    """Whether to load depth as distance along ray or as z-depth values. Default NeRF is distance"""
     random_renders_directory: str = "no_filt_rendered_cam_00"
     """Directory containing random renders for pregen_random_views"""
     rand_pose_type: str = "closeby"
@@ -93,7 +91,6 @@ class HyperSimDataManager(VanillaDataManager):  # pylint: disable=abstract-metho
                                pregen_random_views=self.pregen_random_views,
                                on_the_fly_random_views=self.on_the_fly_random_views,
                                rendered_depth_new_views=self.rendered_depth_new_views,
-                               depth_as_distance=self.config.depth_as_distance,
                                dilation_mask=self.config.dilation_mask,
                                dilation_edge=self.config.dilation_edge)
 
