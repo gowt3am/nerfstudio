@@ -177,12 +177,12 @@ class Cameras(TensorDataclass):
             u_offset, v = np.meshgrid(u_offset, v[::-1])
             uv_offsetu = torch.as_tensor(np.dstack((u_offset, v, np.ones_like(u_offset))), dtype=torch.float32)    # (H, W, 3)
             uv_offsetu = rearrange(uv_offsetu, 'h w c -> (h w) c').to(self.device)
-            xyz_offsetu = rearrange(M_cam_from_uv @ uv_offsetu.T, "c hw -> hw c")
+            xyz_offsetx = rearrange(M_cam_from_uv @ uv_offsetu.T, "c hw -> hw c")
 
             # Depth type = z - Normalize such that |z| = 1
-            self.xyz_offsetu = (xyz_offsetu / torch.abs(xyz_offsetu[:, 2:3]))
+            self.xyz_offsetx = (xyz_offsetx / torch.abs(xyz_offsetx[:, 2:3]))
             # # Depth type = distance - Normalize such that ||ray||=1
-            # self.xyz_offsetu = F.normalize(xyz_offsetu, p=2, dim=-1)
+            # self.xyz_offsetx = F.normalize(xyz_offsetx, p=2, dim=-1)
 
             u = np.linspace(-1.0 + 1.0/width, 1.0 - 1.0/width, width)
             v_offset = np.linspace(-1.0 + 2.0/height, 1.0, height)
@@ -190,20 +190,20 @@ class Cameras(TensorDataclass):
             u, v_offset = np.meshgrid(u, v_offset[::-1])
             uv_offsetv = torch.as_tensor(np.dstack((u, v_offset, np.ones_like(u))), dtype=torch.float32)    # (H, W, 3)
             uv_offsetv = rearrange(uv_offsetv, 'h w c -> (h w) c').to(self.device)
-            xyz_offsetv = rearrange(M_cam_from_uv @ uv_offsetv.T, "c hw -> hw c")
+            xyz_offsety = rearrange(M_cam_from_uv @ uv_offsetv.T, "c hw -> hw c")
 
             # Depth type = z - Normalize such that |z| = 1
-            self.xyz_offsetv = (xyz_offsetv / torch.abs(xyz_offsetv[:, 2:3]))
+            self.xyz_offsety = (xyz_offsety / torch.abs(xyz_offsety[:, 2:3]))
             # # Depth type = distance - Normalize such that ||ray||=1
-            # self.xyz_offsetv = F.normalize(xyz_offsetv, p=2, dim=-1)
+            # self.xyz_offsety = F.normalize(xyz_offsety, p=2, dim=-1)
 
-            self.xyz = self.xyz.unsqueeze(0).to(self.device)
-            self.xyz_offsetu = self.xyz_offsetu.unsqueeze(0).to(self.device)
-            self.xyz_offsetv = self.xyz_offsetv.unsqueeze(0).to(self.device)
+            self.xyz = rearrange(self.xyz, "(h w) c -> 1 h w c", h = height).to(self.device)
+            self.xyz_offsetx = rearrange(self.xyz_offsetx, "(h w) c -> 1 h w c", h = height).to(self.device)
+            self.xyz_offsety = rearrange(self.xyz_offsety, "(h w) c -> 1 h w c", h = height).to(self.device)
         else:
             self.xyz = None
-            self.xyz_offsetu = None
-            self.xyz_offsetv = None
+            self.xyz_offsetx = None
+            self.xyz_offsety = None
 
         self.__post_init__()  # This will do the dataclass post_init and broadcast all the tensors
 
@@ -563,12 +563,22 @@ class Cameras(TensorDataclass):
         # of our output rays at each dimension of our cameras object
         true_indices = [camera_indices[..., i] for i in range(camera_indices.shape[-1])]
 
-        y = coords[..., 0].long()  # (num_rays,) get rid of the last dimension
-        x = coords[..., 1].long()  # (num_rays,) get rid of the last dimension
+        y_idx = coords[..., 0].long()  # (num_rays,) get rid of the last dimension
+        x_idx = coords[..., 1].long()  # (num_rays,) get rid of the last dimension
 
-        coord = torch.stack([         self.xyz[0, x, 1],         self.xyz[0, y, 0]],         -1)  # (num_rays, 2)
-        coord_x_offset = torch.stack([self.xyz_offsetv[0, x, 1], self.xyz_offsetv[0, y, 0]], -1)  # (num_rays, 2)
-        coord_y_offset = torch.stack([self.xyz_offsetu[0, x, 1], self.xyz_offsetu[0, y, 0]], -1)  # (num_rays, 2)
+        y_xyz = self.xyz[0, ..., 1]
+        x_xyz = self.xyz[0, ..., 0]
+        y = y_xyz[y_idx, x_idx]
+        x = x_xyz[y_idx, x_idx]
+        
+        y_xyz_offsetu = self.xyz_offsety[0, ..., 1]
+        x_xyz_offsetu = self.xyz_offsetx[0, ..., 0]
+        y_offset = y_xyz_offsetu[y_idx, x_idx]
+        x_offset = x_xyz_offsetu[y_idx, x_idx]
+        
+        coord = torch.stack([         x,        y       ], -1)  # (num_rays, 2)
+        coord_x_offset = torch.stack([x_offset, y       ], -1)  # (num_rays, 2)
+        coord_y_offset = torch.stack([x,        y_offset], -1)  # (num_rays, 2)
 
         assert (
             coord.shape == num_rays_shape + (2,)
