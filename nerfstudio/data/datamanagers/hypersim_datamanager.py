@@ -39,7 +39,7 @@ class HyperSimDataManagerConfig(VanillaDataManagerConfig):
     """The ray sampling strategy to use. Options are "triangle" and "uniform"."""
     dilation_rate: int = 2
     """The dilation factor to use for the triangle pixel sampler."""
-    random_renders_directory: str = "no_filt_rendered_cam_00"
+    random_renders_directory: str = "rendered_test_00"
     """Directory containing random renders for pregen_random_views"""
     rand_pose_type: str = "closeby"
     """Type of random pose generation - closeby, sparf, increasing"""

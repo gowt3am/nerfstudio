@@ -573,8 +573,6 @@ class ManhattanNormalLoss(nn.Module):
                     device = normals.device, num_clusters = 20, num_iterations = 20,
                     similar_threshold = self.min_cluster_similarity,
                     merge_clusters = True, find_opposites = True)
-        # normals_orthogonal = normals[normal_clusters != 0].contiguous()
-        # normal_clusters = normal_clusters[normal_clusters != 0]
         normals_orthogonal = normals.contiguous()
 
         # Flip opposites, if any, to just have 3 clusters
