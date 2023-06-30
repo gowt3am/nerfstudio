@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """Data parser for HyperSim dataset"""
-import math, json, random, h5py, faiss
+import math, json, random, h5py, faiss, scipy.linalg
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Type, List, Dict, Any
@@ -139,7 +139,8 @@ class HyperSim(DataParser):
         cameras = Cameras(fx=self.fx, fy=self.fy, cx=self.cx, cy=self.cy,
                           height=self.config.height, width=self.config.width,
                           camera_to_worlds=self.poses[:, :3, :4],
-                          camera_type=CameraType.PERSPECTIVE)
+                          camera_type=CameraType.PERSPECTIVE,
+                          M_cam_from_uv=self.M_cam_from_uv.unsqueeze(0))
         
         # Scene (x,y,z) centered at origin with -1 to 1 range after scale + shift
         # Typically used are 1.0 or 1.5
@@ -163,8 +164,11 @@ class HyperSim(DataParser):
                       "scene_boundary": self.scene_boundary,
                       "xyz_min": self.xyz_min, "xyz_max": self.xyz_max,
                       "M_cam_from_uv": self.M_cam_from_uv,
+                      "M_ndc_from_cam": self.M_ndc_from_cam,
+                      "M_uv_from_ndc": self.M_uv_from_ndc,
+                      "M_warp_cam_pts": self.M_warp_cam_pts,
                       "fx": self.fx, "fy": self.fy, "cx": self.cx, "cy": self.cy,
-                      "orig_poses": self.orig_poses})
+                      "fov_rad_y": self.fov_rad_y, "orig_poses": self.orig_poses})
         return dataparser_outputs
 
     def _load_m_per_asset_unit(self):
@@ -265,6 +269,7 @@ class HyperSim(DataParser):
         self.metric_mode = 'asset_units'
         df_camera_parameters_all = pd.read_csv(CAMERA_METADATA_WEBSITE, index_col="scene_name")
         df_ = df_camera_parameters_all.loc[self.scene_name]
+        self.df = df_
 
         # # Matrix to go from the image space to camera coordinates
         # # Scale to meters by self.M_cam_from_uv *= self.config.m_per_asset_unit
@@ -275,27 +280,44 @@ class HyperSim(DataParser):
         ])
         # # Matrix to go from the camera coordinates to image space
         # # Scale to meters by self.M_ndc_from_cam /= self.config.m_per_asset_unit
-        # self.M_ndc_from_cam = torch.FloatTensor([
-        #     [df_['M_proj_00'], df_['M_proj_01'], df_['M_proj_02'], df_['M_proj_03']],
-        #     [df_['M_proj_10'], df_['M_proj_11'], df_['M_proj_12'], df_['M_proj_13']],
-        #     [df_['M_proj_20'], df_['M_proj_21'], df_['M_proj_22'], df_['M_proj_23']],
-        #     [df_['M_proj_30'], df_['M_proj_31'], df_['M_proj_32'], df_['M_proj_33']],
-        # ])
-        # self.M_uv_from_ndc = torch.FloatTensor(
-        #     [[0.5*(self.config.width-1),  0,                          0,   0.5*(self.config.width-1) ],
-        #      [0,                         -0.5*(self.config.height-1), 0,   0.5*(self.config.height-1)],
-        #      [0,                          0,                          0.5, 0.5                       ],
-        #      [0,                          0,                          0,   1.0                       ]])
+        self.M_ndc_from_cam = torch.FloatTensor([
+            [df_['M_proj_00'], df_['M_proj_01'], df_['M_proj_02'], df_['M_proj_03']],
+            [df_['M_proj_10'], df_['M_proj_11'], df_['M_proj_12'], df_['M_proj_13']],
+            [df_['M_proj_20'], df_['M_proj_21'], df_['M_proj_22'], df_['M_proj_23']],
+            [df_['M_proj_30'], df_['M_proj_31'], df_['M_proj_32'], df_['M_proj_33']],
+        ])
+        self.M_uv_from_ndc = torch.FloatTensor(
+            [[0.5*(self.config.width-1),  0,                          0,   0.5*(self.config.width-1) ],
+             [0,                         -0.5*(self.config.height-1), 0,   0.5*(self.config.height-1)],
+             [0,                          0,                          0.5, 0.5                       ],
+             [0,                          0,                          0,   1.0                       ]])
         
         # Useful info at https://stackoverflow.com/questions/11277501/how-to-recover-view-space-position-given-view-space-depth-value-and-ndc-xy/46118945#46118945
         # FoV from https://github.com/apple/ml-hypersim/blob/main/contrib/mikeroberts3000/python/dataset_generate_camera_parameters_metadata.py#L164
         # https://github.com/apple/ml-hypersim/issues/44 - fx = fy = 886.81
-        self.fov_rad_x = df_['settings_camera_fov']
+        if df_["use_camera_physical"]:
+            print("Using Camera Physical FOV")
+            self.fov_rad_x = df_["camera_physical_fov"]
+        else:
+            print("Using Camera Settings FOV")
+            self.fov_rad_x = df_["settings_camera_fov"]
         self.fov_rad_y = 2.0 * np.arctan(self.config.height * np.tan(self.fov_rad_x/2.0) / self.config.width)
         self.fx = self.config.width / 2.0 / math.tan(self.fov_rad_x / 2.0)
         self.fy = self.config.height / 2.0 / math.tan(self.fov_rad_y / 2.0)
         self.cx = (self.config.width - 1.0) / 2.0
         self.cy = (self.config.height - 1.0) / 2.0
+        self.K = torch.tensor([[self.fx, 0, self.cx], [0, self.fy, self.cy], [0, 0, 1]])
+        # DO NOT USE THIS K (only works for some scenes!!), use M_cam_from_uv instead
+
+        M_cam_from_uv_canonical = torch.tensor([[np.tan(self.fov_rad_x/2.0), 0.0, 0.0],
+                                                [0.0, np.tan(self.fov_rad_y/2.0), 0.0],
+                                                [0.0, 0.0, -1.0]], dtype=torch.float32)
+
+        # [ONLY FOR PyTorch3D] has problems with non-standard perspective projection matrices from Hypersim
+        # so we construct a matrix to transform a camera-space points to warped locations,
+        # such that the warped position can be projected with a standard perspective projection matrix
+        M_warp_cam_pts_ = M_cam_from_uv_canonical @ torch.linalg.inv(self.M_cam_from_uv)
+        self.M_warp_cam_pts  = torch.from_numpy(scipy.linalg.block_diag(M_warp_cam_pts_, 1)).float()
 
         print(f'Loading Camera Extrinsics...')
         # Load (unordered) camera poses for all camera trajectories

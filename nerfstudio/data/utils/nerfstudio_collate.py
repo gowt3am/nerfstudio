@@ -172,6 +172,7 @@ def nerfstudio_collate(
             op([cameras.fy for cameras in batch], dim=0),
             op([cameras.cx for cameras in batch], dim=0),
             op([cameras.cy for cameras in batch], dim=0),
+            M_cam_from_uv = op([cameras.M_cam_from_uv for cameras in batch], dim=0),
             height=op([cameras.height for cameras in batch], dim=0),
             width=op([cameras.width for cameras in batch], dim=0),
             distortion_params=op(

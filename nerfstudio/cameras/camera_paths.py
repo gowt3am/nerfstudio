@@ -41,7 +41,8 @@ def get_interpolated_camera_path(cameras: Cameras, steps: int) -> Cameras:
     poses = cameras.camera_to_worlds.cpu().numpy()
     poses, Ks = get_interpolated_poses_many(poses, Ks, steps_per_transition=steps)
 
-    cameras = Cameras(fx=Ks[:, 0, 0], fy=Ks[:, 1, 1], cx=Ks[0, 0, 2], cy=Ks[0, 1, 2], camera_to_worlds=poses)
+    cameras = Cameras(fx=Ks[:, 0, 0], fy=Ks[:, 1, 1], cx=Ks[0, 0, 2], cy=Ks[0, 1, 2],
+                      camera_to_worlds=poses, M_cam_from_uv=cameras.M_cam_from_uv)
     return cameras
 
 

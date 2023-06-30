@@ -24,6 +24,9 @@ from typing import Dict, List, Optional, Tuple, Union
 import cv2
 import torch
 import torchvision
+import numpy as np
+from einops import rearrange
+from torch.nn import functional as F
 from torch.nn import Parameter
 from torchtyping import TensorType
 
@@ -88,6 +91,7 @@ class Cameras(TensorDataclass):
     camera_type: TensorType["num_cameras":..., 1]
     times: Optional[TensorType["num_cameras", 1]]
     metadata: Optional[Dict]
+    M_cam_from_uv: Optional[TensorType["batch_Mcamuvs":..., 4, 4]]
 
     def __init__(
         self,
@@ -109,6 +113,7 @@ class Cameras(TensorDataclass):
         ] = CameraType.PERSPECTIVE,
         times: Optional[TensorType["num_cameras"]] = None,
         metadata: Optional[Dict] = None,
+        M_cam_from_uv: Optional[TensorType["batch_Mcamuvs":..., 4, 4]] = None,
     ) -> None:
         """Initializes the Cameras object.
 
@@ -123,7 +128,7 @@ class Cameras(TensorDataclass):
         """
 
         # This will notify the tensordataclass that we have a field with more than 1 dimension
-        self._field_custom_dimensions = {"camera_to_worlds": 2}
+        self._field_custom_dimensions = {"camera_to_worlds": 2, "M_cam_from_uv": 2}
 
         self.camera_to_worlds = camera_to_worlds
 
@@ -144,7 +149,61 @@ class Cameras(TensorDataclass):
         self.camera_type = self._init_get_camera_type(camera_type)
         self.times = self._init_get_times(times)
 
+        if isinstance(self.width, torch.Tensor):
+            width = self.width.view(-1)[0].item()
+            height = self.height.view(-1)[0].item()
+
         self.metadata = metadata
+        if M_cam_from_uv is not None:
+            self.M_cam_from_uv = M_cam_from_uv.to(self.device)
+            M_cam_from_uv = self.M_cam_from_uv[0] if self.M_cam_from_uv.ndim == 3 else self.M_cam_from_uv
+
+            u = np.linspace(-1.0 + 1.0/width, 1.0 - 1.0/width, width)
+            v = np.linspace(-1.0 + 1.0/height, 1.0 - 1.0/height, height)
+            # Reverse vertical coordinate because [H=0, W=0] corresponds to (u=-1, v=1)
+            u, v = np.meshgrid(u, v[::-1])
+            uv = torch.as_tensor(np.dstack((u, v, np.ones_like(u))), dtype=torch.float32)    # (H, W, 3)
+            uv = rearrange(uv, 'h w c -> (h w) c').to(self.device)
+            xyz = rearrange(M_cam_from_uv @ uv.T, "c hw -> hw c")
+
+            # Depth type = z - Normalize such that |z| = 1
+            self.xyz = (xyz / torch.abs(xyz[:, 2:3]))
+            # # Depth type = distance - Normalize such that ||ray||=1
+            # self.xyz = F.normalize(xyz, p=2, dim=-1)
+
+            u_offset = np.linspace(-1.0 + 2.0/width, 1.0, width)
+            v = np.linspace(-1.0 + 1.0/height, 1.0 - 1.0/height, height)
+            # Reverse vertical coordinate because [H=0, W=0] corresponds to (u=-1, v=1)
+            u_offset, v = np.meshgrid(u_offset, v[::-1])
+            uv_offsetu = torch.as_tensor(np.dstack((u_offset, v, np.ones_like(u_offset))), dtype=torch.float32)    # (H, W, 3)
+            uv_offsetu = rearrange(uv_offsetu, 'h w c -> (h w) c').to(self.device)
+            xyz_offsetu = rearrange(M_cam_from_uv @ uv_offsetu.T, "c hw -> hw c")
+
+            # Depth type = z - Normalize such that |z| = 1
+            self.xyz_offsetu = (xyz_offsetu / torch.abs(xyz_offsetu[:, 2:3]))
+            # # Depth type = distance - Normalize such that ||ray||=1
+            # self.xyz_offsetu = F.normalize(xyz_offsetu, p=2, dim=-1)
+
+            u = np.linspace(-1.0 + 1.0/width, 1.0 - 1.0/width, width)
+            v_offset = np.linspace(-1.0 + 2.0/height, 1.0, height)
+            # Reverse vertical coordinate because [H=0, W=0] corresponds to (u=-1, v=1)
+            u, v_offset = np.meshgrid(u, v_offset[::-1])
+            uv_offsetv = torch.as_tensor(np.dstack((u, v_offset, np.ones_like(u))), dtype=torch.float32)    # (H, W, 3)
+            uv_offsetv = rearrange(uv_offsetv, 'h w c -> (h w) c').to(self.device)
+            xyz_offsetv = rearrange(M_cam_from_uv @ uv_offsetv.T, "c hw -> hw c")
+
+            # Depth type = z - Normalize such that |z| = 1
+            self.xyz_offsetv = (xyz_offsetv / torch.abs(xyz_offsetv[:, 2:3]))
+            # # Depth type = distance - Normalize such that ||ray||=1
+            # self.xyz_offsetv = F.normalize(xyz_offsetv, p=2, dim=-1)
+
+            self.xyz = self.xyz.unsqueeze(0).to(self.device)
+            self.xyz_offsetu = self.xyz_offsetu.unsqueeze(0).to(self.device)
+            self.xyz_offsetv = self.xyz_offsetv.unsqueeze(0).to(self.device)
+        else:
+            self.xyz = None
+            self.xyz_offsetu = None
+            self.xyz_offsetv = None
 
         self.__post_init__()  # This will do the dataclass post_init and broadcast all the tensors
 
@@ -450,9 +509,11 @@ class Cameras(TensorDataclass):
         # This will do the actual work of generating the rays now that we have standardized the inputs
         # raybundle.shape == (num_rays) when done
         # pylint: disable=protected-access
-        raybundle = cameras._generate_rays_from_coords(
-            camera_indices, coords, camera_opt_to_camera, distortion_params_delta, disable_distortion=disable_distortion
-        )
+        if self.M_cam_from_uv is not None:
+            raybundle = cameras._generate_rays_from_coords_hypersim(camera_indices, coords)
+        else:
+            raybundle = cameras._generate_rays_from_coords(camera_indices, coords,
+                        camera_opt_to_camera, distortion_params_delta, disable_distortion=disable_distortion)
 
         # If we have mandated that we don't keep the shape, then we flatten
         if keep_shape is False:
@@ -483,6 +544,86 @@ class Cameras(TensorDataclass):
         # so there might be a rogue squeeze happening somewhere, and this may cause some unintended behaviour
         # that we haven't caught yet with tests
         return raybundle
+
+    def _generate_rays_from_coords_hypersim(self,
+                camera_indices: TensorType["num_rays":..., "num_cameras_batch_dims"],
+                coords: TensorType["num_rays":..., 2]) -> RayBundle:
+        """ Use self.xyz to generate rays for the given camera indices and coords """
+        # Make sure we're on the right devices
+        camera_indices = camera_indices.to(self.device)
+        coords = coords.to(self.device)
+
+        # Checking to make sure everything is of the right shape and type
+        num_rays_shape = camera_indices.shape[:-1]
+        assert camera_indices.shape == num_rays_shape + (self.ndim,)
+        assert coords.shape == num_rays_shape + (2,)
+        assert coords.shape[-1] == 2
+
+        # Here, we've broken our indices down along the num_cameras_batch_dims dimension allowing us to index by all
+        # of our output rays at each dimension of our cameras object
+        true_indices = [camera_indices[..., i] for i in range(camera_indices.shape[-1])]
+
+        y = coords[..., 0].long()  # (num_rays,) get rid of the last dimension
+        x = coords[..., 1].long()  # (num_rays,) get rid of the last dimension
+
+        coord = torch.stack([         self.xyz[0, x, 1],         self.xyz[0, y, 0]],         -1)  # (num_rays, 2)
+        coord_x_offset = torch.stack([self.xyz_offsetv[0, x, 1], self.xyz_offsetv[0, y, 0]], -1)  # (num_rays, 2)
+        coord_y_offset = torch.stack([self.xyz_offsetu[0, x, 1], self.xyz_offsetu[0, y, 0]], -1)  # (num_rays, 2)
+
+        assert (
+            coord.shape == num_rays_shape + (2,)
+            and coord_x_offset.shape == num_rays_shape + (2,)
+            and coord_y_offset.shape == num_rays_shape + (2,)
+        )
+
+        # Stack image coordinates and image coordinates offset by 1, check shapes too
+        coord_stack = torch.stack([coord, coord_x_offset, coord_y_offset], dim=0)  # (3, num_rays, 2)
+        assert coord_stack.shape == (3,) + num_rays_shape + (2,)
+
+        # Gets our directions for all our rays in camera coordinates and checks shapes at the end
+        # Here, directions_stack is of shape (3, num_rays, 3)
+        # directions_stack[0] is the direction for ray in camera coordinates
+        # directions_stack[1] is the direction for ray in camera coordinates offset by 1 in x
+        # directions_stack[2] is the direction for ray in camera coordinates offset by 1 in y
+        directions_stack = torch.empty((3,) + num_rays_shape + (3,), device=self.device)
+        mask = (self.camera_type[true_indices] == CameraType.PERSPECTIVE.value).squeeze(-1)  # (num_rays)
+        mask = torch.stack([mask, mask, mask], dim=0)
+        directions_stack[..., 0][mask] = torch.masked_select(coord_stack[..., 0], mask).float()
+        directions_stack[..., 1][mask] = torch.masked_select(coord_stack[..., 1], mask).float()
+        directions_stack[..., 2][mask] = -1.0
+        assert directions_stack.shape == (3,) + num_rays_shape + (3,)
+
+        c2w = self.camera_to_worlds[true_indices]
+        assert c2w.shape == num_rays_shape + (3, 4)
+        rotation = c2w[..., :3, :3]  # (..., 3, 3)
+        assert rotation.shape == num_rays_shape + (3, 3)
+
+        directions_stack = torch.sum(directions_stack[..., None, :] * rotation, dim=-1)  # (..., 1, 3) * (..., 3, 3) -> (..., 3)
+        directions_stack, directions_norm = camera_utils.normalize_with_norm(directions_stack, -1)
+        assert directions_stack.shape == (3,) + num_rays_shape + (3,)
+
+        origins = c2w[..., :3, 3]  # (..., 3)
+        assert origins.shape == num_rays_shape + (3,)
+        directions = directions_stack[0]
+        assert directions.shape == num_rays_shape + (3,)
+
+        # norms of the vector going between adjacent coords, giving us dx and dy per output ray
+        dx = torch.sqrt(torch.sum((directions - directions_stack[1]) ** 2, dim=-1))  # ("num_rays":...,)
+        dy = torch.sqrt(torch.sum((directions - directions_stack[2]) ** 2, dim=-1))  # ("num_rays":...,)
+        assert dx.shape == num_rays_shape and dy.shape == num_rays_shape
+        pixel_area = (dx * dy)[..., None]  # ("num_rays":..., 1)
+        assert pixel_area.shape == num_rays_shape + (1,)
+        
+        metadata = {"directions_norm": directions_norm[0].detach()}
+        times = self.times[camera_indices, 0] if self.times is not None else None
+        return RayBundle(
+            origins=origins,
+            directions=directions,
+            pixel_area=pixel_area,
+            camera_indices=camera_indices,
+            times=times,
+            metadata=metadata,
+        )
 
     # pylint: disable=too-many-statements
     def _generate_rays_from_coords(
@@ -712,8 +853,6 @@ class Cameras(TensorDataclass):
         pixel_area = (dx * dy)[..., None]  # ("num_rays":..., 1)
         assert pixel_area.shape == num_rays_shape + (1,)
 
-        times = self.times[camera_indices, 0] if self.times is not None else None
-
         metadata = (
             self._apply_fn_to_dict(self.metadata, lambda x: x[true_indices]) if self.metadata is not None else None
         )
@@ -756,6 +895,7 @@ class Cameras(TensorDataclass):
             "camera_to_world": self.camera_to_worlds[camera_idx].tolist(),
             "camera_index": camera_idx,
             "times": flattened[camera_idx].times.item() if self.times is not None else None,
+            "M_cam_from_uv": flattened[camera_idx].M_cam_from_uv.tolist() if self.M_cam_from_uv is not None else None,
         }
         if image is not None:
             image_uint8 = (image * 255).detach().type(torch.uint8)
@@ -790,6 +930,7 @@ class Cameras(TensorDataclass):
         Args:
             scaling_factor: Scaling factor to apply to the output resolution.
         """
+        scale_factor = scaling_factor
         if isinstance(scaling_factor, (float, int)):
             scaling_factor = torch.tensor([scaling_factor]).to(self.device).broadcast_to((self.cx.shape))
         elif isinstance(scaling_factor, torch.Tensor) and scaling_factor.shape == self.shape:
@@ -807,3 +948,6 @@ class Cameras(TensorDataclass):
         self.cy = self.cy * scaling_factor
         self.height = (self.height * scaling_factor).to(torch.int64)
         self.width = (self.width * scaling_factor).to(torch.int64)
+
+        if self.M_cam_from_uv is not None and scale_factor != 1.0:
+            raise NotImplementedError("Rescaling with M_cam_from_uv is not implemented yet")
