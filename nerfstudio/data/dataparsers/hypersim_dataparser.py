@@ -82,7 +82,7 @@ class HyperSim(DataParser):
     def _generate_dataparser_outputs(self, split="train", **kwargs):
         self.test_tuning = kwargs.get("test_tuning", False)
         self.use_pregen_random_views = kwargs.get("pregen_random_views", False)
-        self.random_renders_directory = kwargs.get("random_renders_directory", "no_filt_rendered_cam_00")
+        self.random_renders_directory = kwargs.get("random_renders_directory", "rendered_test_00")
         self.use_on_the_fly_random_views = kwargs.get("on_the_fly_random_views", False)
         self.rand_pose_type = kwargs.get("rand_pose_type", "closeby")
         self.num_total_random_poses = kwargs.get("num_total_random_poses", 0)
@@ -120,22 +120,8 @@ class HyperSim(DataParser):
             self.gen_poses = torch.cat((self.poses, self.gen_poses), dim=0)
             self.poses = self.gen_poses.clone()
         elif self.use_on_the_fly_random_views:
-            if self.rand_pose_type == "closeby":
-                self.gen_poses, self.nearest_cam_ids = self.generate_all_random_poses(
-                                        self.poses, num_poses=self.num_total_random_poses)
-            elif self.rand_pose_type == "sparf":
-                self.gen_poses, self.nearest_cam_ids = self.generate_all_random_poses_sparf(
-                                        self.poses, num_poses=self.num_total_random_poses)
-            elif self.rand_pose_type == "increasing":
-                self.gen_poses, self.nearest_cam_ids = self.generate_all_random_poses_slowly_increasing(
-                    self.poses, num_poses=self.num_total_random_poses, num_trajectories=self.num_random_views_per_batch)
-            else:
-                raise ValueError(f"Unknown rand_pose_type {self.rand_pose_type}")
-            
-            self.nearest_cam_ids = np.concatenate((np.arange(self.poses.shape[0]), self.nearest_cam_ids))
-            self.gen_poses = torch.cat((self.poses, self.gen_poses), dim=0).cuda()
-            self.poses = self.gen_poses.clone()
-
+            self.generate_random_poses()
+        
         cameras = Cameras(fx=self.fx, fy=self.fy, cx=self.cx, cy=self.cy,
                           height=self.config.height, width=self.config.width,
                           camera_to_worlds=self.poses[:, :3, :4],
@@ -167,6 +153,7 @@ class HyperSim(DataParser):
                       "M_ndc_from_cam": self.M_ndc_from_cam,
                       "M_uv_from_ndc": self.M_uv_from_ndc,
                       "M_warp_cam_pts": self.M_warp_cam_pts,
+                      "M_p3dcam_from_cam": self.M_p3dcam_from_cam,
                       "fx": self.fx, "fy": self.fy, "cx": self.cx, "cy": self.cy,
                       "fov_rad_y": self.fov_rad_y, "orig_poses": self.orig_poses})
         return dataparser_outputs
@@ -318,6 +305,11 @@ class HyperSim(DataParser):
         # such that the warped position can be projected with a standard perspective projection matrix
         M_warp_cam_pts_ = M_cam_from_uv_canonical @ torch.linalg.inv(self.M_cam_from_uv)
         self.M_warp_cam_pts  = torch.from_numpy(scipy.linalg.block_diag(M_warp_cam_pts_, 1)).float()
+        # Transform from Right-Up-Back (Cam to World) format of Hypersim to
+        # Left-Up-Front (World to Cam) format of PyTorch3D
+        self.M_p3dcam_from_cam = torch.eye(4)
+        self.M_p3dcam_from_cam[0,0] = -1
+        self.M_p3dcam_from_cam[2,2] = -1
 
         print(f'Loading Camera Extrinsics...')
         # Load (unordered) camera poses for all camera trajectories
@@ -401,172 +393,160 @@ class HyperSim(DataParser):
         self.transform = self.transform[:3, :]
         self.scale_factor = 1.0/(2*scale)
 
-    def generate_all_random_poses(self, poses: TensorType, num_poses: int = 1500):
+    def generate_random_poses(self):
         """Generate all random poses that will be used for training"""
-        print(f'Generating {num_poses} random poses from trainset poses...')
+        
+        if self.rand_pose_type == "closeby":
+            self.gen_poses, self.nearest_cam_ids = self._closeby_poses(
+                                    self.poses, num_poses=self.num_total_random_poses)
+        elif self.rand_pose_type == "sparf":
+            self.gen_poses, self.nearest_cam_ids = self._sparf_poses(
+                                    self.poses, num_poses=self.num_total_random_poses)
+        elif self.rand_pose_type == "increasing":
+            self.gen_poses, self.nearest_cam_ids = self._slowly_increasing_poses(
+                self.poses, num_poses=self.num_total_random_poses, num_trajectories=self.num_random_views_per_batch)
+        else:
+            raise ValueError(f"Unknown rand_pose_type {self.rand_pose_type}")
+        self.nearest_cam_ids = np.concatenate((np.arange(self.poses.shape[0]), self.nearest_cam_ids))
+        self.gen_poses = torch.cat((self.poses, self.gen_poses), dim=0).cuda()
+        self.poses = self.gen_poses.clone()
+    
+    def _normalize(self, x):
+            """Normalization helper function."""
+            return x / np.linalg.norm(x)
+
+    def _viewmatrix(self, lookdir, up, position, subtract_position=False):
+        """Construct lookat view matrix."""
+        vec2 = self._normalize((lookdir - position) if subtract_position else lookdir)
+        vec0 = self._normalize(np.cross(up, vec2))
+        vec1 = self._normalize(np.cross(vec2, vec0))
+        m = np.stack([vec0, vec1, vec2, position], axis=1)
+        return m
+
+    def _closeby_poses(self, poses: TensorType, num_poses: int = 1500):
+        print(f'Generating {num_poses} random poses from trainset poses, closest to training views...')
 
         # Poses are in Right-Up-Back (Cam to World) format
         all_poses = poses.numpy()
         all_ups = all_poses[:, :3, 1]
         all_origins = all_poses[:, :3, 3]
-        all_z_axes = -all_poses[:, :3, 2]
+        all_z_axes = - all_poses[:, :3, 2]
         all_lookat = all_origins + all_z_axes
 
         # Using faiss to cluster all_origins into 2 clusters, and sample pairs
-        # separately from each cluster
+        # separately from each cluster - Helps for some scenes
         kmeans = faiss.Kmeans(d=3, k=2, niter=20, verbose=False)
         kmeans.train(all_origins.astype(np.float32))
         _, I = kmeans.index.search(all_origins.astype(np.float32), 1)
         cluster1 = {i: all_origins[i] for i in range(all_origins.shape[0]) if I[i] == 0}
         cluster2 = {i: all_origins[i] for i in range(all_origins.shape[0]) if I[i] == 1}
 
-        def sample_new_ups(num_ups):
-            """Randomly selects 2 different camera ups, and lineraly interpolates between them"""
-            idx1 = np.random.choice(all_ups.shape[0], size=num_ups*2, replace=True)
-            ratios = np.random.rand(num_ups)
-            up1 = all_ups[idx1[:num_ups]]
-            up2 = all_ups[idx1[num_ups:]]
-            new_ups = ratios[:, None] * up1 + (1 - ratios[:, None]) * up2
-            return new_ups
+        # Randomly select 2 different camera ups, and lineraly interpolates between them
+        idx1 = np.random.choice(all_ups.shape[0], size=num_poses*2, replace=True)
+        ratios = np.random.rand(num_poses)
+        up1 = all_ups[idx1[:num_poses]]
+        up2 = all_ups[idx1[num_poses:]]
+        new_ups = ratios[:, None] * up1 + (1 - ratios[:, None]) * up2
+
+        """
+        Randomly selects 2 different camera origins from the same cluster (to ensure not
+        in different parts of room), and lineraly interpolates both origin and z-axis
+        between them.  
         
-        def spread_out_sample_new_origin_and_z_axes(num_origins):
-            """Randomly selects a camera origin, and lineraly interpolates with center of room,
-            end-goal is to generate camera poses that are spread out over entire room"""
-            all_origins = np.concatenate([all_origins, np.zeros((1, 3))], axis=0)
-            idx1 = np.random.choice(all_origins.shape[0]-1, size=num_origins, replace=True)
-            ratios = np.random.rand(num_origins)
-            origin1 = all_origins[idx1]
-            origin2 = np.repeat(all_origins[-1][None, :], num_origins, axis=0)
-            new_origins = ratios[:, None] * origin1 + (1 - ratios[:, None]) * origin2
-            
-            # Randomly inverts to other side of origin - More likely if closer to
-            # center of room (avoid going through walls)
-            probs = np.random.rand(num_origins)
-            new_origins = np.where((probs*ratios < 0.2).reshape(num_origins, 1), -new_origins, new_origins)
-
-            # Sample same lookat point as the original view
-            new_lookats = all_lookat[idx1]
-            new_z_axes = new_lookats - new_origins
-
-            # Randomly shift origin about z_axis, so as to sample both below and above
-            probs = np.random.rand(num_origins)
-            new_origins[:, 2] = np.where(probs < 0.5, -new_origins[:,2], new_origins[:,2])
-            return new_origins, new_z_axes
-
-        def closeby_sample_new_origin_and_z_axes(num_origins):
-            """Randomly selects 2 different camera origins, and lineraly interpolates between them,
-            end-goal is to generate camera poses that are close to original views"""
-            idx1 = np.random.choice(all_origins.shape[0], size=num_origins, replace=True)
-            # Sample idx2 from the same cluster as idx1
-            idx2 = np.array([np.random.choice(list(cluster1.keys())) if I[i] == 0 
-                             else np.random.choice(list(cluster2.keys())) for i in idx1])
-            ratios = np.random.rand(num_origins)
-            origin1 = all_origins[idx1]
-            origin2 = all_origins[idx2]
-            new_origins = ratios[:, None] * origin1 + (1 - ratios[:, None]) * origin2
-            new_lookats = np.where(ratios[:, None] < 0.5, all_lookat[idx2], all_lookat[idx1])
-            new_z_axes = new_lookats - new_origins
-            nearest_idxs = np.where(ratios < 0.5, idx2, idx1)
-            return new_origins, new_z_axes, nearest_idxs
+        Goal is to generate camera poses that are close to the original views.
+        """
+        idx1 = np.random.choice(all_origins.shape[0], size=num_poses, replace=True)
+        idx2 = np.array([np.random.choice(list(cluster1.keys())) if I[i] == 0 
+                            else np.random.choice(list(cluster2.keys())) for i in idx1])
+        ratios = np.random.rand(num_poses)
         
-        def normalize(x):
-            """Normalization helper function."""
-            return x / np.linalg.norm(x)
-
-        def viewmatrix(lookdir, up, position, subtract_position=False):
-            """Construct lookat view matrix."""
-            vec2 = normalize((lookdir - position) if subtract_position else lookdir)
-            vec0 = normalize(np.cross(up, vec2))
-            vec1 = normalize(np.cross(vec2, vec0))
-            m = np.stack([vec0, vec1, vec2, position], axis=1)
-            return m
-
+        origin1 = all_origins[idx1]
+        origin2 = all_origins[idx2]
+        new_origins = ratios[:, None] * origin1 + (1 - ratios[:, None]) * origin2
+        
+        new_lookats = np.where(ratios[:, None] < 0.5, all_lookat[idx2], all_lookat[idx1])
+        new_z_axes = new_lookats - new_origins
+        render_camera_idxs = np.where(ratios < 0.5, idx2, idx1)
+        
         new_poses = []
-        new_ups = sample_new_ups(num_poses)
-        new_origins, new_z_axes, render_camera_idx = closeby_sample_new_origin_and_z_axes(num_poses)
         for i in range(num_poses):
-            new_poses.append(viewmatrix(new_z_axes[i], new_ups[i], new_origins[i]))
+            new_poses.append(self._viewmatrix(new_z_axes[i], new_ups[i], new_origins[i]))
         
-        # Poses are in Left-Up-Front (Cam to World) format, converting it back to
-        # Right-Up-Back (Cam to World) format
+        # Poses are in Left-Up-Front (Cam to World) format, convert it to Right-Up-Back (Cam to World) format
         new_poses = np.stack(new_poses, axis=0)
-        new_poses[:, :, 0] = -new_poses[:, :, 0]
-        new_poses[:, :, 2] = -new_poses[:, :, 2]
+        new_poses[:, :, 0] = - new_poses[:, :, 0]
+        new_poses[:, :, 2] = - new_poses[:, :, 2]
         new_poses = np.concatenate([new_poses, np.zeros((num_poses, 1, 4))], axis=1)
         new_poses[:, 3, 3] = 1.0
-        return torch.from_numpy(new_poses).float(), render_camera_idx
+        return torch.from_numpy(new_poses).float(), render_camera_idxs
     
-    def generate_all_random_poses_sparf(self, poses: TensorType, num_poses: int = 1500):
-        """Generate all random poses similar to SPARF that will be used for training"""
+    def _sparf_poses(self, poses: TensorType, num_poses: int = 1500):
         print(f'Generating {num_poses} random poses from trainset poses, using SPARF sampling...')
 
         # Poses are in Right-Up-Back (Cam to World) format
         all_poses = poses.numpy()
         all_ups = all_poses[:, :3, 1]
         all_origins = all_poses[:, :3, 3]
-        all_z_axes = -all_poses[:, :3, 2]
+        all_z_axes = - all_poses[:, :3, 2]
         all_lookat = all_origins + all_z_axes
 
-        # Sample random indices out of all_poses
+        """
+        Randomly select a camera pose, find the closest camera and linearly interpolate 
+        between them. Use the lookat direction of whichever camera factor is more.
+        
+        Goal is to generate camera poses that are as good as the original views
+        """
         idx1 = np.random.choice(all_origins.shape[0], size=num_poses, replace=True)
         chosen_origins1 = all_origins[idx1].copy()
         chosen_lookat1 = all_lookat[idx1].copy()
         chosen_ups1 = all_ups[idx1].copy()
 
-        nearest_cam_ids = []
+        idx2 = []
         for i in range(num_poses):
             dists = np.linalg.norm(all_origins - chosen_origins1[i], axis=1)
             dists[idx1[i]] = np.inf
-            nearest_cam_ids.append(np.argmin(dists))
-        choosen_origins2 = all_origins[nearest_cam_ids].copy()
-        choosen_lookat2 = all_lookat[nearest_cam_ids].copy()
-        choosen_ups2 = all_ups[nearest_cam_ids].copy()
+            idx2.append(np.argmin(dists))
+        choosen_origins2 = all_origins[idx2].copy()
+        choosen_lookat2 = all_lookat[idx2].copy()
+        choosen_ups2 = all_ups[idx2].copy()
 
         ratios = np.random.rand(num_poses)
         new_origins = ratios[:, None] * chosen_origins1 + (1 - ratios[:, None]) * choosen_origins2
         new_ups = ratios[:, None] * chosen_ups1 + (1 - ratios[:, None]) * choosen_ups2
         new_lookats = np.where(ratios[:, None] < 0.5, choosen_lookat2, chosen_lookat1)
         new_z_axes = new_lookats - new_origins
-        render_camera_idx = np.where(ratios < 0.5, nearest_cam_ids, idx1)
-        
-        def normalize(x):
-            """Normalization helper function."""
-            return x / np.linalg.norm(x)
-
-        def viewmatrix(lookdir, up, position, subtract_position=False):
-            """Construct lookat view matrix."""
-            vec2 = normalize((lookdir - position) if subtract_position else lookdir)
-            vec0 = normalize(np.cross(up, vec2))
-            vec1 = normalize(np.cross(vec2, vec0))
-            m = np.stack([vec0, vec1, vec2, position], axis=1)
-            return m
+        render_camera_idxs = np.where(ratios < 0.5, idx2, idx1)
 
         new_poses = []
         for i in range(num_poses):
-            new_poses.append(viewmatrix(new_z_axes[i], new_ups[i], new_origins[i]))
+            new_poses.append(self._viewmatrix(new_z_axes[i], new_ups[i], new_origins[i]))
         
-        # Poses are in Left-Up-Front (Cam to World) format, converting it back to
-        # Right-Up-Back (Cam to World) format
+        # Poses are in Left-Up-Front (Cam to World) format, convert it to Right-Up-Back (Cam to World) format
         new_poses = np.stack(new_poses, axis=0)
-        new_poses[:, :, 0] = -new_poses[:, :, 0]
-        new_poses[:, :, 2] = -new_poses[:, :, 2]
+        new_poses[:, :, 0] = - new_poses[:, :, 0]
+        new_poses[:, :, 2] = - new_poses[:, :, 2]
         new_poses = np.concatenate([new_poses, np.zeros((num_poses, 1, 4))], axis=1)
         new_poses[:, 3, 3] = 1.0
-        return torch.from_numpy(new_poses).float(), render_camera_idx
+        return torch.from_numpy(new_poses).float(), render_camera_idxs
     
-    def generate_all_random_poses_slowly_increasing(self, poses: TensorType,
-                                num_poses: int = 1500, num_trajectories: int = 50):
-        """Generate new random poses that slowly move away from train views"""
+    def _slowly_increasing_poses(self, poses: TensorType, num_poses: int = 1500, num_trajectories: int = 50):
         print(f'Generating {num_poses} random poses that slowly move away from trainset poses...')
 
         # Poses are in Right-Up-Back (Cam to World) format
         all_poses = poses.numpy()
         all_ups = all_poses[:, :3, 1]
         all_origins = all_poses[:, :3, 3]
-        all_z_axes = -all_poses[:, :3, 2]
+        all_z_axes = - all_poses[:, :3, 2]
         all_lookat = all_origins + all_z_axes
     
-        # Use Pytorch3D sample_farthest_points to sample num_trajectories points
+        """
+        Randomly select num_trajectories farthest camera poses, keep them as the starting point.
+        Find distance to nearest camera (this is a proxy for distance we can move freely).
+        Now randomly sample a 3D direction, and sample num_per_trajectory points along the line,
+        still looking at the original lookat direction.
+        
+        Goal is to generate increasingly complicated views so network learns well.
+        """
         chosen_origins1, idx1 = pytorch3d.ops.sample_farthest_points(
                                 points=torch.from_numpy(all_origins).unsqueeze(0),
                                 lengths=None, K=num_trajectories)
@@ -583,43 +563,31 @@ class HyperSim(DataParser):
         choosen_origins2 = all_origins[idx2].copy()
         dists = np.linalg.norm(chosen_origins1 - choosen_origins2, axis=1)
         
-        # Get num_trajectories random directions (3-dim vector)
         random_directions = np.random.randn(num_trajectories, 3)
         random_directions = random_directions / np.linalg.norm(random_directions, axis=1)[:, None]
         random_directions = random_directions * dists[:, None]
         end_points = chosen_origins1 + random_directions
         
-        def normalize(x):
-            """Normalization helper function."""
-            return x / np.linalg.norm(x)
-
-        def viewmatrix(lookdir, up, position, subtract_position=False):
-            """Construct lookat view matrix."""
-            vec2 = normalize((lookdir - position) if subtract_position else lookdir)
-            vec0 = normalize(np.cross(up, vec2))
-            vec1 = normalize(np.cross(vec2, vec0))
-            m = np.stack([vec0, vec1, vec2, position], axis=1)
-            return m
-        
         new_poses = np.zeros((num_poses, 3, 4))
-        render_camera_idx = np.zeros((num_poses), dtype=np.int32)
+        render_camera_idxs = np.zeros((num_poses), dtype=np.int32)
         num_views_per_trajectory = num_poses // num_trajectories
         for i in range(num_trajectories):
             # Sample num_per_trajectory points along the line between chosen_origins1 and end_points
             ratios = np.linspace(0, 1, num_views_per_trajectory)
+            
             new_origins = (1 - ratios[:, None]) * chosen_origins1[i] + ratios[:, None] * end_points[i]
             new_ups = np.repeat(chosen_ups1[i][None, :], num_views_per_trajectory, axis=0)
             new_lookats = np.repeat(chosen_lookat1[i][None, :], num_views_per_trajectory, axis=0)
             new_z_axes = new_lookats - new_origins
+            
             for j in range(num_views_per_trajectory):
-                new_poses[j*num_trajectories + i] = viewmatrix(new_z_axes[j], new_ups[j], new_origins[j])
-                render_camera_idx[j*num_trajectories + i] = idx1[i]
+                new_poses[j*num_trajectories + i] = self._viewmatrix(new_z_axes[j], new_ups[j], new_origins[j])
+                render_camera_idxs[j*num_trajectories + i] = idx1[i]
 
-        # Poses are in Left-Up-Front (Cam to World) format, converting it back to
-        # Right-Up-Back (Cam to World) format
+        # Poses are in Left-Up-Front (Cam to World) format, convert it to Right-Up-Back (Cam to World) format
         new_poses = np.stack(new_poses, axis=0)
-        new_poses[:, :, 0] = -new_poses[:, :, 0]
-        new_poses[:, :, 2] = -new_poses[:, :, 2]
+        new_poses[:, :, 0] = - new_poses[:, :, 0]
+        new_poses[:, :, 2] = - new_poses[:, :, 2]
         new_poses = np.concatenate([new_poses, np.zeros((num_poses, 1, 4))], axis=1)
         new_poses[:, 3, 3] = 1.0
-        return torch.from_numpy(new_poses).float(), render_camera_idx
+        return torch.from_numpy(new_poses).float(), render_camera_idxs

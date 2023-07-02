@@ -542,8 +542,8 @@ class ManhattanNerfactoModel(Model):
             loss_dict.update(self.normal_supervision_loss(outputs["normals"][outputs["normal_valid_mask"]],
                                                           batch["normals"][outputs["normal_valid_mask"]].to(self.device), step))
         
-        if "rendered_orientation_loss" in outputs:
-            loss_dict["orientation_loss"] = self.config.orientation_loss_mult * torch.mean(outputs["rendered_orientation_loss"])
+        # if "rendered_orientation_loss" in outputs:
+        #     loss_dict["orientation_loss"] = self.config.orientation_loss_mult * torch.mean(outputs["rendered_orientation_loss"])
         
         if self.training:
             if "rand_rgb_loss" in outputs:
