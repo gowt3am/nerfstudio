@@ -73,8 +73,6 @@ class HyperSimDataset(InputDataset):
         self.W_orig = self.metadata["W_orig"]
         self.H = int(self.H_orig * scale_factor)
         self.W = int(self.W_orig * scale_factor)
-        self.metadata["H"] = self.H
-        self.metadata["W"] = self.W
         self.xyz_min = self.metadata["xyz_min"]
         self.xyz_max = self.metadata["xyz_max"]
         self.scene_boundary = self.metadata["scene_boundary"]
@@ -90,7 +88,7 @@ class HyperSimDataset(InputDataset):
         self.cy = self.metadata["cy"]
         self.orig_poses = self.metadata["orig_poses"]
 
-        self.distance_per_z = torch.from_numpy(self._distance_to_z())
+        self.metadata["distance_per_z"] = torch.from_numpy(self._distance_per_z())
         if "depth" in self.labels:
             self._process_and_clip_depth()
 
@@ -285,7 +283,7 @@ class HyperSimDataset(InputDataset):
                 metadata[label] = self._downscale_content(torch.from_numpy(content), label)
         return metadata
     
-    def _distance_to_z(self):
+    def _distance_per_z(self):
         '''Division factor for converting depth from a distance to camera center to z-plane value
         Code taken from: https://github.com/apple/ml-hypersim/issues/9#issuecomment-754935697
         '''
@@ -354,8 +352,8 @@ class HyperSimDataset(InputDataset):
             D2 = rearrange(D2, "h w -> (h w) 1")
             P_2 = xyz_2 * D2                        # (H*W, 3)
 
-            R2 = train_data["pose"][:3, :3].cpu()         # (3, 3) in Right-Up-Back (Cam 2 World) format
-            t2 = train_data["pose"][:3, 3].cpu()          # (3, 1) in Right-Up-Back (Cam 2 World) format
+            R2 = train_data["pose"][:3, :3].cpu()   # (3, 3) in Right-Up-Back (Cam 2 World) format
+            t2 = train_data["pose"][:3, 3].cpu()    # (3, 1) in Right-Up-Back (Cam 2 World) format
             P_world = (R2 @ P_2.T + t2[:, None])    # (3, H*W)
     
             P_world_flat = rearrange(P_world, "c hw -> hw c")
