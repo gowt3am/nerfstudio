@@ -458,9 +458,9 @@ class HyperSimDataset(InputDataset):
                                                      dk_edge=self.dk_edge)
                 mask[edge_mask > 0] = np.array([0, 0, 0])
 
-            save_dest = "/scratch_net/bmicdl02/gsenthi/data/temp/"
-            img = Image.fromarray(image)
-            img.save(save_dest + f"img_{self.rand_indices[i]}.png")
+            # save_dest = "/scratch_net/bmicdl02/gsenthi/data/temp/"
+            # img = Image.fromarray(image)
+            # img.save(save_dest + f"img_{self.rand_indices[i]}.png")
             
             self.rendered_images.append(image)
             self.rendered_masks.append(mask)
