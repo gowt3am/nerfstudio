@@ -180,6 +180,8 @@ class ManhattanNerfactoModelConfig(ModelConfig):
     """Whether to use only manhattan-normal pixels to create random views or not"""
     use_depth_consistency_loss: bool = False
     """Whether to use depth consistency loss for rendered_views or not"""
+    new_view_loss_factor: float = 1.0
+    """Factor to multiply the new-view RGB MSE loss by"""
 
 
 class ManhattanNerfactoModel(Model):
@@ -202,12 +204,15 @@ class ManhattanNerfactoModel(Model):
         self.rendered_depth_new_views = self.kwargs["rendered_depth_new_views"]
         self.num_test_data = self.kwargs["num_test_data"]
         self.num_random_views = self.kwargs["num_random_views"]
+
+        self.num_real_images = self.metadata["num_real_images"]
         self.H_orig = self.metadata["H_orig"]
         self.W_orig = self.metadata["W_orig"]
         self.M_cam_from_uv = self.metadata["M_cam_from_uv"]
         self.M_ndc_from_cam = self.metadata["M_ndc_from_cam"].cuda()
         self.M_uv_from_ndc = self.metadata["M_uv_from_ndc"].cuda()
         self.distance_per_z = self.metadata["distance_per_z"].cuda()
+
         if self.rendered_depth_new_views:
             self.prepare_random_view_generation()
 
@@ -532,7 +537,17 @@ class ManhattanNerfactoModel(Model):
         else:
             tgt = batch["image"].to(self.device)
 
-        loss_dict["rgb"] = self.rgb_loss(tgt, outputs["rgb"])
+        if self.config.new_view_loss_factor != 1.0 and self.pregen_random_views:
+            # Based on batch['indices'], use rgb_loss if img index < 50, and 0.01 * rgb_loss if img index >= 50
+            indices = batch["indices"].to(self.device)
+            tgt_1 = tgt[indices[:, 0] < self.num_real_images].contiguous()
+            tgt_2 = tgt[indices[:, 0] >= self.num_real_images].contiguous()
+            outputs_1 = outputs["rgb"][indices[:, 0] < self.num_real_images].contiguous()
+            outputs_2 = outputs["rgb"][indices[:, 0] >= self.num_real_images].contiguous()
+            loss_dict["rgb"] = self.rgb_loss(tgt_1, outputs_1) + self.config.new_view_loss_factor * self.rgb_loss(tgt_2, outputs_2)
+        else:
+            loss_dict["rgb"] = self.rgb_loss(tgt, outputs["rgb"])
+            
         if self.config.opacity_penalty_weight > 0:
             loss_dict["opacity"] = self.config.opacity_penalty_weight * self.opacity_loss(outputs["accumulation"])
         

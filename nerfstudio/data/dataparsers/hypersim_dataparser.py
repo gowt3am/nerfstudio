@@ -135,7 +135,8 @@ class HyperSim(DataParser):
 
         dataparser_outputs = DataparserOutputs(image_filenames=self.all_image_names, cameras=cameras,
             scene_box=scene_box, dataparser_scale=self.scale_factor, dataparser_transform=self.transform,
-            metadata={"depth_filenames": self.all_depth_names,
+            metadata={"num_real_images": len(self.all_image_names),
+                      "depth_filenames": self.all_depth_names,
                       "normal_filenames": self.all_normal_names,
                       "semantic_filenames": self.all_semantic_names,
                       "semantic_instance_filenames": self.all_semantic_instance_names,
