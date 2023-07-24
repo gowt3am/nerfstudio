@@ -74,6 +74,8 @@ class HyperSimDataParserConfig(DataParserConfig):
     """Image height"""
     width: int = 1024
     """Image width"""
+    few_shot: int = -1
+    """Number of images to use for few-shot training, -1 to use all, automatically chooses the right images"""
 
 @dataclass
 class HyperSim(DataParser):
@@ -169,7 +171,7 @@ class HyperSim(DataParser):
     def _load_scene_metadata(self):
         """Load scene statistics - List of images for each camera trajectory"""
         self.scene_name = self.config.data.parts[-1]
-        self.all_metadata_path = self.config.data.parents[0] / "all_scenes_metadata_new.json"
+        self.all_metadata_path = self.config.data.parents[0] / "all_scenes_metadata_sparse.json"
         
         # If metadata file available, load it
         if self.all_metadata_path.exists():
@@ -195,48 +197,109 @@ class HyperSim(DataParser):
     def _load_image_ids(self):
         """Load images ids for all requested camera trajectories"""
         print(f'Extracting cameras and their corresponding images')
+        assert self.config.few_shot in [-1, 8, 15, 30]
 
         # By default we use only cam_00 for all scenes, however if not available, switch to cam_01
         if self.config.cam_ids == ['cam_00'] and 'cam_00' not in self.scene_metadata['cams']:
             self.config.cam_ids = ['cam_01']
             print('Scene did not have cam_00, switching to use cam_01...')
+        
+        if self.config.few_shot > 0:
+            print(f'Using {self.config.few_shot} images for few-shot training')
+            if self.config.few_shot == 8:
+                img_set = "few_08"
+            elif self.config.few_shot == 15:
+                img_set = "few_15"
+            elif self.config.few_shot == 30:
+                img_set = "few_30"
+            else:
+                raise ValueError(f"Unknown few-shot value {self.config.few_shot}, choose one of 8, 15, 30")
 
-        # Go over each selected camera trajectory and append its image ids as cam_id.img_id
-        self.all_img_ids = {}
-        self.cams = []
-        for cur_cam_id in self.config.cam_ids:
-            self.cams.append(cur_cam_id)
-            self.all_img_ids[cur_cam_id] = []
-            for img in self.scene_metadata['cams'][cur_cam_id]['img_names']:
-                full_img_name = self.config.data / 'images' / f'scene_{cur_cam_id}_final_hdf5' / img
-                if full_img_name.exists() and h5py.is_hdf5(full_img_name):
-                    self.all_img_ids[cur_cam_id].append(f'{cur_cam_id}.{img.split(".")[1]}')
-            
-        # Assert that we have at least one image
-        assert len(self.all_img_ids[self.config.cam_ids[0]]) > 0
-        print(f'Loaded {len(self.config.cam_ids)} cameras')
-        print(f'Loaded {sum([len(self.all_img_ids[k]) for k in self.all_img_ids.keys()])} image ids in total')
+            self.all_train_ids = {}
+            self.all_valid_ids = {}
+            for cur_cam_id in self.config.cam_ids:
+                self.all_train_ids[cur_cam_id] = []
+                for img in self.scene_metadata['cams'][img_set]['train_names']:
+                    full_img_name = self.config.data / 'images' / f'scene_{cur_cam_id}_final_hdf5' / img
+                    if full_img_name.exists() and h5py.is_hdf5(full_img_name):
+                        self.all_train_ids[cur_cam_id].append(f'{cur_cam_id}.{img.split(".")[1]}')
+                
+                self.all_valid_ids[cur_cam_id] = []
+                for img in self.scene_metadata['cams'][img_set]['val_names']:
+                    full_img_name = self.config.data / 'images' / f'scene_{cur_cam_id}_final_hdf5' / img
+                    if full_img_name.exists() and h5py.is_hdf5(full_img_name):
+                        self.all_valid_ids[cur_cam_id].append(f'{cur_cam_id}.{img.split(".")[1]}')
+
+            # Assert that we have at least one image
+            assert len(self.all_train_ids[self.config.cam_ids[0]]) > 0
+            print(f'Loaded {len(self.config.cam_ids)} cameras')
+            print(f'Loaded {sum([len(self.all_train_ids[k]) for k in self.all_train_ids.keys()])} image ids for training')
+            print(f'Loaded {sum([len(self.all_valid_ids[k]) for k in self.all_valid_ids.keys()])} image ids for validation')
+
+        else:
+            # Go over each selected camera trajectory and append its image ids as cam_id.img_id
+            self.all_img_ids = {}
+            self.cams = []
+            for cur_cam_id in self.config.cam_ids:
+                self.cams.append(cur_cam_id)
+                self.all_img_ids[cur_cam_id] = []
+                for img in self.scene_metadata['cams'][cur_cam_id]['img_names']:
+                    full_img_name = self.config.data / 'images' / f'scene_{cur_cam_id}_final_hdf5' / img
+                    if full_img_name.exists() and h5py.is_hdf5(full_img_name):
+                        self.all_img_ids[cur_cam_id].append(f'{cur_cam_id}.{img.split(".")[1]}')
+                
+            # Assert that we have at least one image
+            assert len(self.all_img_ids[self.config.cam_ids[0]]) > 0
+            print(f'Loaded {len(self.config.cam_ids)} cameras')
+            print(f'Loaded {sum([len(self.all_img_ids[k]) for k in self.all_img_ids.keys()])} image ids in total')
 
     def _generate_data_splits(self, split: str = 'train'):
         """ For each camera trajectory, split the images into train/val splits"""
-        # Go through each cam and extract ids for specified split\
-        self.img_ids = []
-        for cam_id in self.all_img_ids.keys():
-            cur_img_ids = self.all_img_ids[cam_id]
-            split_point = round(self.config.split_factor * len(cur_img_ids))
-            
-            # Image ids are already randomized
-            if split == 'train':
-                cur_img_ids = cur_img_ids[:split_point]
-            elif split == 'test' or split == 'val':
-                cur_img_ids = cur_img_ids[split_point:]
-            elif split == 'all':
-                cur_img_ids = cur_img_ids
+        # Go through each cam and extract ids for specified split
+        
+        if self.config.few_shot > 0:
+            self.img_ids = []
+            if split == "train":
+                for cam_id in self.all_train_ids.keys():
+                    cur_img_ids = self.all_train_ids[cam_id]
+                    cur_img_ids.sort()
+                    self.img_ids.extend(cur_img_ids)
+            elif split == "test" or split == "val":
+                for cam_id in self.all_valid_ids.keys():
+                    cur_img_ids = self.all_valid_ids[cam_id]
+                    cur_img_ids.sort()
+                    self.img_ids.extend(cur_img_ids)
+            elif split == "all":
+                for cam_id in self.all_train_ids.keys():
+                    cur_img_ids = self.all_train_ids[cam_id]
+                    cur_img_ids.sort()
+                    self.img_ids.extend(cur_img_ids)
+                for cam_id in self.all_valid_ids.keys():
+                    cur_img_ids = self.all_valid_ids[cam_id]
+                    cur_img_ids.sort()
+                    self.img_ids.extend(cur_img_ids)
             else:
                 raise ValueError(f"Unknown dataparser split {split}")
-            # Sort after split
-            cur_img_ids.sort()
-            self.img_ids.extend(cur_img_ids)
+            
+        else:
+            self.img_ids = []
+            for cam_id in self.all_img_ids.keys():
+                cur_img_ids = self.all_img_ids[cam_id]
+                split_point = round(self.config.split_factor * len(cur_img_ids))
+                
+                # Image ids are already randomized
+                if split == 'train':
+                    cur_img_ids = cur_img_ids[:split_point]
+                elif split == 'test' or split == 'val':
+                    cur_img_ids = cur_img_ids[split_point:]
+                elif split == 'all':
+                    cur_img_ids = cur_img_ids
+                else:
+                    raise ValueError(f"Unknown dataparser split {split}")
+                # Sort after split
+                cur_img_ids.sort()
+                self.img_ids.extend(cur_img_ids)
+                
         self.all_image_names = [str(self.config.data) + '/images/scene_' + x.split('.')[0] +
             '_final_hdf5/frame.' + x.split('.')[-1] + '.color.hdf5' for x in self.img_ids]
         self.all_depth_names = [str(self.config.data) + '/images/scene_' + x.split('.')[0] +
