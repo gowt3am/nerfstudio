@@ -537,7 +537,7 @@ class ManhattanNerfactoModel(Model):
         else:
             tgt = batch["image"].to(self.device)
 
-        if self.config.new_view_loss_factor != 1.0 and self.pregen_random_views:
+        if self.config.new_view_loss_factor != 1.0 and (self.pregen_random_views or self.on_the_fly_random_views):
             # Based on batch['indices'], use rgb_loss if img index < 50, and 0.01 * rgb_loss if img index >= 50
             indices = batch["indices"].to(self.device)
             tgt_1 = tgt[indices[:, 0] < self.num_real_images].contiguous()

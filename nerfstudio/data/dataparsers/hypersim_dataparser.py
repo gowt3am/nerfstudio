@@ -74,8 +74,6 @@ class HyperSimDataParserConfig(DataParserConfig):
     """Image height"""
     width: int = 1024
     """Image width"""
-    few_shot: int = -1
-    """Number of images to use for few-shot training, -1 to use all, automatically chooses the right images"""
 
 @dataclass
 class HyperSim(DataParser):
@@ -89,6 +87,7 @@ class HyperSim(DataParser):
         self.rand_pose_type = kwargs.get("rand_pose_type", "closeby")
         self.num_total_random_poses = kwargs.get("num_total_random_poses", 0)
         self.num_random_views_per_batch = kwargs.get("num_random_views_per_batch", 0)
+        self.few_shot = kwargs.get("few_shot", -1)
         
         self._load_m_per_asset_unit()
         self._load_scene_metadata()
@@ -197,23 +196,23 @@ class HyperSim(DataParser):
     def _load_image_ids(self):
         """Load images ids for all requested camera trajectories"""
         print(f'Extracting cameras and their corresponding images')
-        assert self.config.few_shot in [-1, 8, 15, 30]
+        assert self.few_shot in [-1, 8, 15, 30]
 
         # By default we use only cam_00 for all scenes, however if not available, switch to cam_01
         if self.config.cam_ids == ['cam_00'] and 'cam_00' not in self.scene_metadata['cams']:
             self.config.cam_ids = ['cam_01']
             print('Scene did not have cam_00, switching to use cam_01...')
         
-        if self.config.few_shot > 0:
-            print(f'Using {self.config.few_shot} images for few-shot training')
-            if self.config.few_shot == 8:
+        if self.few_shot > 0:
+            print(f'Using {self.few_shot} images for few-shot training')
+            if self.few_shot == 8:
                 img_set = "few_08"
-            elif self.config.few_shot == 15:
+            elif self.few_shot == 15:
                 img_set = "few_15"
-            elif self.config.few_shot == 30:
+            elif self.few_shot == 30:
                 img_set = "few_30"
             else:
-                raise ValueError(f"Unknown few-shot value {self.config.few_shot}, choose one of 8, 15, 30")
+                raise ValueError(f"Unknown few-shot value {self.few_shot}, choose one of 8, 15, 30")
 
             self.all_train_ids = {}
             self.all_valid_ids = {}
@@ -257,7 +256,7 @@ class HyperSim(DataParser):
         """ For each camera trajectory, split the images into train/val splits"""
         # Go through each cam and extract ids for specified split
         
-        if self.config.few_shot > 0:
+        if self.few_shot > 0:
             self.img_ids = []
             if split == "train":
                 for cam_id in self.all_train_ids.keys():

@@ -434,19 +434,22 @@ class VanillaDataManager(DataManager, Generic[TDataset]):  # pylint: disable=abs
 
         if self.test_tuning:
             self.train_dataparser_outputs = self.dataparser.get_dataparser_outputs(
-                                            split=self.test_split, test_tuning=True)
+                                            split=self.test_split, test_tuning=True, few_shot=self.config.few_shot)
         elif self.pregen_random_views:
             self.train_dataparser_outputs = self.dataparser.get_dataparser_outputs(
                                             split="train", pregen_random_views=True,
-                                            random_renders_directory=self.config.random_renders_directory)
+                                            random_renders_directory=self.config.random_renders_directory,
+                                            few_shot=self.config.few_shot)
         elif self.on_the_fly_random_views:
             self.train_dataparser_outputs = self.dataparser.get_dataparser_outputs(
                                             split="train", on_the_fly_random_views=True,
                                             rand_pose_type=self.config.rand_pose_type,
                                             num_total_random_poses=self.num_total_random_poses,
-                                            num_random_views_per_batch=self.num_random_views_per_batch)
+                                            num_random_views_per_batch=self.num_random_views_per_batch,
+                                            few_shot=self.config.few_shot)
         else:
-            self.train_dataparser_outputs = self.dataparser.get_dataparser_outputs(split="train")
+            self.train_dataparser_outputs = self.dataparser.get_dataparser_outputs(split="train",
+                                                                    few_shot=self.config.few_shot)
 
         self.train_dataset = self.create_train_dataset()
         self.eval_dataset = self.create_eval_dataset()
@@ -479,7 +482,7 @@ class VanillaDataManager(DataManager, Generic[TDataset]):  # pylint: disable=abs
     def create_eval_dataset(self) -> TDataset:
         """Sets up the data loaders for evaluation"""
         return self.dataset_type(
-            dataparser_outputs=self.dataparser.get_dataparser_outputs(split=self.test_split),
+            dataparser_outputs=self.dataparser.get_dataparser_outputs(split=self.test_split, few_shot=self.config.few_shot),
             scale_factor=self.config.camera_res_scale_factor,
         )
 

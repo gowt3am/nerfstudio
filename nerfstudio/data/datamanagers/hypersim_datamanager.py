@@ -47,6 +47,8 @@ class HyperSimDataManagerConfig(VanillaDataManagerConfig):
     """Random view mask dilation factor (to avoid invalid-pixel neighbors being detected as edges)"""
     dilation_edge: int = 3
     """Random view edge dilation factor (for filling in edge neighbors)"""
+    few_shot: int = -1
+    """Number of images to use for few-shot training, -1 to use all, automatically chooses the right images"""
     
 
 
@@ -96,7 +98,7 @@ class HyperSimDataManager(VanillaDataManager):  # pylint: disable=abstract-metho
 
     def create_eval_dataset(self) -> HyperSimDataset:
         return HyperSimDataset(dataparser_outputs=self.dataparser.get_dataparser_outputs(
-            split=self.test_split), scale_factor=self.config.camera_res_scale_factor,
+            split=self.test_split, few_shot=self.config.few_shot), scale_factor=self.config.camera_res_scale_factor,
             labels=self.config.labels)
 
     def generate_random_views(self, num_views: int, epoch: int) -> Dict:
